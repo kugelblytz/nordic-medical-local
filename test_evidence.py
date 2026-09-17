@@ -31,3 +31,11 @@ def test_segment_evidence_uses_segment_boundary_with_padding():
         '100 milligrams once daily',
         mode='segment',
     ) == (9.8, 15.2)
+
+
+def test_segment_id_is_preferred_over_quote_search():
+    assert locate_evidence(
+        [sample_segment()],
+        'quote can even be imperfect here',
+        segment_ids=[0],
+    ) == (9.8, 15.2)
