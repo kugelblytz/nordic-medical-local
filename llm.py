@@ -456,7 +456,13 @@ def answer_questions(
                 time.perf_counter() - classify_started,
             )
             break
-        except (ValueError, json.JSONDecodeError, KeyError) as exc:
+        except (
+            ValueError,
+            json.JSONDecodeError,
+            KeyError,
+            httpx.TimeoutException,
+            httpx.HTTPError,
+        ) as exc:
             last_error = exc
             if attempt == 0:
                 time.sleep(0.1)
