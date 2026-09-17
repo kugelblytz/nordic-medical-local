@@ -1,3 +1,5 @@
+import time
+
 import httpx
 
 from config import (
@@ -6,6 +8,7 @@ from config import (
     OLLAMA_NUM_CTX,
     OLLAMA_TIMEOUT,
     OLLAMA_URL,
+    OLLAMA_WARMUP_TIMEOUT,
 )
 from models import LLMAnswerBatch, TranscriptSegment
 
@@ -27,9 +30,12 @@ Rules:
 '''
 
 
-def _client() -> httpx.Client:
+def _client(timeout_seconds: float = OLLAMA_TIMEOUT) -> httpx.Client:
     return httpx.Client(
-        timeout=httpx.Timeout(OLLAMA_TIMEOUT, connect=min(5.0, OLLAMA_TIMEOUT))
+        timeout=httpx.Timeout(
+            timeout_seconds,
+            connect=min(5.0, timeout_seconds),
+        )
     )
 
 
@@ -55,9 +61,22 @@ def warmup() -> None:
         },
         'messages': [{'role': 'user', 'content': 'Return {"ok": true}.'}],
     }
-    with _client() as client:
-        response = client.post(f'{OLLAMA_URL}/api/chat', json=payload)
-        response.raise_for_status()
+
+    last_error = None
+    for attempt in range(1, 3):
+        try:
+            with _client(OLLAMA_WARMUP_TIMEOUT) as client:
+                response = client.post(f'{OLLAMA_URL}/api/chat', json=payload)
+                response.raise_for_status()
+            return
+        except (httpx.TimeoutException, httpx.HTTPError) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(2)
+
+    raise RuntimeError(
+        f'Ollama warmup failed after 2 attempts: {last_error}'
+    ) from last_error
 
 
 def answer_questions(
