@@ -1,9 +1,13 @@
-import json
-
 import httpx
 
-from config import OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT, OLLAMA_KEEP_ALIVE
-from models import TranscriptSegment, LLMAnswerBatch
+from config import (
+    OLLAMA_KEEP_ALIVE,
+    OLLAMA_MODEL,
+    OLLAMA_NUM_CTX,
+    OLLAMA_TIMEOUT,
+    OLLAMA_URL,
+)
+from models import LLMAnswerBatch, TranscriptSegment
 
 
 SYSTEM_PROMPT = '''You are solving a medical-dialogue evidence verification task.
@@ -44,7 +48,11 @@ def warmup() -> None:
             'properties': {'ok': {'type': 'boolean'}},
             'required': ['ok'],
         },
-        'options': {'temperature': 0, 'num_predict': 16},
+        'options': {
+            'temperature': 0,
+            'num_predict': 16,
+            'num_ctx': OLLAMA_NUM_CTX,
+        },
         'messages': [{'role': 'user', 'content': 'Return {"ok": true}.'}],
     }
     with _client() as client:
@@ -73,7 +81,11 @@ Return exactly {len(questions)} answers.'''
         'think': False,
         'keep_alive': OLLAMA_KEEP_ALIVE,
         'format': LLMAnswerBatch.model_json_schema(),
-        'options': {'temperature': 0, 'num_predict': 1400},
+        'options': {
+            'temperature': 0,
+            'num_predict': 1400,
+            'num_ctx': OLLAMA_NUM_CTX,
+        },
         'messages': [
             {'role': 'system', 'content': SYSTEM_PROMPT},
             {'role': 'user', 'content': user_prompt},
