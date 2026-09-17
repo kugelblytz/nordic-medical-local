@@ -37,7 +37,11 @@ def predict(req: ASRQuestionRequestDto) -> ASRQuestionResponseDto:
             start = end = None
 
             if answer:
-                start, end = locate_evidence(segments, item.evidence_quote)
+                start, end = locate_evidence(
+                    segments,
+                    item.evidence_quote,
+                    item.evidence_segment_ids,
+                )
 
             answers.append(answer)
             starts.append(start)
