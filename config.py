@@ -16,6 +16,7 @@ ASR_LANGUAGE = os.getenv('ASR_LANGUAGE', 'en')
 OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://127.0.0.1:11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3:8b')
 OLLAMA_TIMEOUT = float(os.getenv('OLLAMA_TIMEOUT', '35'))
+OLLAMA_WARMUP_TIMEOUT = float(os.getenv('OLLAMA_WARMUP_TIMEOUT', '180'))
 OLLAMA_KEEP_ALIVE = os.getenv('OLLAMA_KEEP_ALIVE', '30m')
 OLLAMA_NUM_CTX = int(os.getenv('OLLAMA_NUM_CTX', '8192'))
 
