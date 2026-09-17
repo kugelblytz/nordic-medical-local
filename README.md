@@ -95,7 +95,7 @@ Open TCP 9054 in the VM's Network Security Group before testing remotely.
 
 Important defaults:
 
-- `ASR_MODEL=large-v3-turbo`
+- `ASR_MODEL=large-v3`
 - `ASR_DEVICE=cuda`
 - `ASR_COMPUTE_TYPE=float16`
 - `OLLAMA_MODEL=qwen3:14b`
@@ -135,7 +135,7 @@ Real GPU/model throughput still needs to be measured on the target VM because it
 1. Run the 390 supplied training questions and record score + worst-case latency.
 2. Inspect errors by `positive`, `hard_negative`, and `off_topic`.
 3. Compare `EVIDENCE_MODE=segment` against `word`.
-4. Test Whisper `large-v3-turbo` vs `large-v3`.
+4. Benchmark Whisper `large-v3` against `large-v3-turbo` if latency becomes tight.
 5. Test Qwen3 8B against a larger local model only if latency and VRAM allow it.
 
 The competition rules prohibit cloud APIs during inference, so both ASR and question answering stay local.
