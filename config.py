@@ -8,7 +8,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() not in {'0', 'false', 'no', 'off'}
 
 
-ASR_MODEL = os.getenv('ASR_MODEL', 'large-v3')
+ASR_MODEL = os.getenv('ASR_MODEL', 'large-v3-turbo')
 ASR_DEVICE = os.getenv('ASR_DEVICE', 'cuda')
 ASR_COMPUTE_TYPE = os.getenv('ASR_COMPUTE_TYPE', 'float16')
 ASR_LANGUAGE = os.getenv('ASR_LANGUAGE', 'en')
