@@ -1,5 +1,7 @@
 import re
 from difflib import SequenceMatcher
+
+from config import EVIDENCE_MODE, EVIDENCE_PAD_SECONDS
 from models import TranscriptSegment
 
 
@@ -11,40 +13,82 @@ def _quote_tokens(quote: str) -> list[str]:
     return [t for t in (_norm_token(x) for x in quote.split()) if t]
 
 
-def locate_quote(segments: list[TranscriptSegment], quote: str):
-    q = _quote_tokens(quote)
-    if not q:
-        return None, None
-
+def _flatten_words(segments: list[TranscriptSegment]):
     words = []
-    for seg in segments:
-        for w in seg.words:
-            n = _norm_token(w.text)
-            if n:
-                words.append((n, w.start, w.end))
+    for seg_idx, seg in enumerate(segments):
+        for word in seg.words:
+            token = _norm_token(word.text)
+            if token:
+                words.append((token, word.start, word.end, seg_idx))
+    return words
 
+
+def _find_quote_window(segments: list[TranscriptSegment], quote: str):
+    query = _quote_tokens(quote)
+    if not query:
+        return None
+
+    words = _flatten_words(segments)
     if not words:
-        return None, None
+        return None
 
-    toks = [x[0] for x in words]
-    m = len(q)
+    tokens = [word[0] for word in words]
+    width = len(query)
 
-    for i in range(0, len(toks) - m + 1):
-        if toks[i:i + m] == q:
-            return words[i][1], words[i + m - 1][2]
+    for start in range(0, len(tokens) - width + 1):
+        if tokens[start:start + width] == query:
+            return words, start, width
 
     best = None
-    lengths = range(max(1, m - 2), min(len(toks), m + 3) + 1)
-    q_join = ' '.join(q)
-    for win_len in lengths:
-        for i in range(0, len(toks) - win_len + 1):
-            cand = ' '.join(toks[i:i + win_len])
-            score = SequenceMatcher(None, q_join, cand).ratio()
+    query_text = ' '.join(query)
+    for window_width in range(
+        max(1, width - 2),
+        min(len(tokens), width + 3) + 1,
+    ):
+        for start in range(0, len(tokens) - window_width + 1):
+            candidate = ' '.join(tokens[start:start + window_width])
+            score = SequenceMatcher(None, query_text, candidate).ratio()
             if best is None or score > best[0]:
-                best = (score, i, win_len)
+                best = (score, start, window_width)
 
     if best and best[0] >= 0.82:
-        _, i, win_len = best
-        return words[i][1], words[i + win_len - 1][2]
+        _, start, window_width = best
+        return words, start, window_width
 
-    return None, None
+    return None
+
+
+def locate_quote(segments: list[TranscriptSegment], quote: str):
+    match = _find_quote_window(segments, quote)
+    if match is None:
+        return None, None
+
+    words, start, width = match
+    return words[start][1], words[start + width - 1][2]
+
+
+def locate_evidence(
+    segments: list[TranscriptSegment],
+    quote: str,
+    mode: str = EVIDENCE_MODE,
+):
+    match = _find_quote_window(segments, quote)
+    if match is None:
+        return None, None
+
+    words, start, width = match
+    first = words[start]
+    last = words[start + width - 1]
+
+    if mode == 'word':
+        evidence_start = first[1]
+        evidence_end = last[2]
+    else:
+        first_segment = first[3]
+        last_segment = last[3]
+        evidence_start = segments[first_segment].start
+        evidence_end = segments[last_segment].end
+
+    evidence_start = max(0.0, evidence_start - EVIDENCE_PAD_SECONDS)
+    evidence_end = evidence_end + EVIDENCE_PAD_SECONDS
+    return evidence_start, evidence_end
