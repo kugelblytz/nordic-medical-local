@@ -1,7 +1,8 @@
 import base64
 import logging
+
 from asr import transcribe
-from evidence import locate_quote
+from evidence import locate_evidence
 from llm import answer_questions
 from models import ASRQuestionRequestDto, ASRQuestionResponseDto
 
@@ -18,12 +19,16 @@ def _fallback(n: int) -> ASRQuestionResponseDto:
 
 def predict(req: ASRQuestionRequestDto) -> ASRQuestionResponseDto:
     n = len(req.questions)
+
     try:
         audio = base64.b64decode(req.audio_base64, validate=True)
         segments = transcribe(audio)
+        if not segments:
+            raise RuntimeError('ASR returned no transcript segments')
+
         batch = answer_questions(segments, req.questions)
 
-        answers = []
+        answers: list[bool] = []
         starts = []
         ends = []
 
@@ -32,7 +37,7 @@ def predict(req: ASRQuestionRequestDto) -> ASRQuestionResponseDto:
             start = end = None
 
             if answer:
-                start, end = locate_quote(segments, item.evidence_quote)
+                start, end = locate_evidence(segments, item.evidence_quote)
 
             answers.append(answer)
             starts.append(start)
@@ -45,5 +50,8 @@ def predict(req: ASRQuestionRequestDto) -> ASRQuestionResponseDto:
         )
 
     except Exception:
-        log.exception('Prediction failed for %s; returning valid fallback', req.audio_filename)
+        log.exception(
+            'Prediction failed for %s; returning valid fallback',
+            req.audio_filename,
+        )
         return _fallback(n)
