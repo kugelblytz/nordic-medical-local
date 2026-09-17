@@ -1,4 +1,5 @@
 from typing import List, Optional
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -37,6 +38,8 @@ class TranscriptSegment(BaseModel):
 
 class LLMAnswer(BaseModel):
     answer: bool
+    reason_code: str = 'not_explicit'
+    evidence_segment_ids: List[int] = Field(default_factory=list)
     evidence_quote: str = ''
 
 
