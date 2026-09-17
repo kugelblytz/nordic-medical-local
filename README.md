@@ -2,7 +2,7 @@
 
 A local inference implementation for the **Medical Appointment** use case:
 
-**MP3 → faster-whisper → local Qwen3 via Ollama → yes/no → evidence quote → timestamp span**
+**MP3 → faster-whisper → local Qwen3 14B via Ollama → contrastive entailment → segment evidence → timestamp span**
 
 No cloud API is used during `/predict`.
 
@@ -20,7 +20,7 @@ The endpoint accepts one conversation plus all questions and returns exactly:
 
 The score is `0.4 * accuracy + 0.6 * mean temporal IoU`.
 
-The supplied training annotations have positive evidence spans averaging about 3.2 seconds (median about 2.9 seconds), so the default `EVIDENCE_MODE=segment` returns the Whisper utterance containing the supporting quote. You can validate `EVIDENCE_MODE=word` as an alternative.
+The supplied training annotations have positive evidence spans averaging about 3.2 seconds (median about 2.9 seconds). The model now selects explicit Whisper segment IDs for positive answers, with quote matching retained as a fallback. The prompt explicitly checks hard-negative differences in entity, dose/value, time, location, negation, and discussed-vs-completed actions.
 
 ## Azure / NVIDIA setup
 
@@ -45,7 +45,7 @@ Install Ollama and pull Qwen3:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:8b
+ollama pull qwen3:14b
 sudo systemctl enable --now ollama
 ```
 
@@ -98,7 +98,7 @@ Important defaults:
 - `ASR_MODEL=large-v3-turbo`
 - `ASR_DEVICE=cuda`
 - `ASR_COMPUTE_TYPE=float16`
-- `OLLAMA_MODEL=qwen3:8b`
+- `OLLAMA_MODEL=qwen3:14b`
 - `EVIDENCE_MODE=segment`
 - `EVIDENCE_PAD_SECONDS=0.20`
 - `WARMUP_ON_START=true`
@@ -180,7 +180,7 @@ The script will:
 3. install Python and CUDA runtime dependencies
 4. install Ollama if needed
 5. start Ollama in the background
-6. pull `qwen3:8b`
+6. pull `qwen3:14b`
 7. load/warm Whisper and Qwen
 8. start FastAPI on `0.0.0.0:9054`
 
