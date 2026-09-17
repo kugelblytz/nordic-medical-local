@@ -14,21 +14,69 @@ from config import (
 from models import LLMAnswer, LLMAnswerBatch, TranscriptSegment
 
 
-SYSTEM_PROMPT = '''You are solving a medical-dialogue evidence verification task.
-For every question, decide whether the proposition is explicitly established by the transcript.
+REASON_CODES = [
+    'exact_support',
+    'wrong_entity',
+    'wrong_value',
+    'wrong_time',
+    'wrong_location',
+    'negated',
+    'contradicted',
+    'discussed_not_done',
+    'not_explicit',
+    'off_topic',
+]
 
-Rules:
-- Return true ONLY when the transcript supports the proposition.
-- A near miss is false: wrong dose, duration, date, drug, body location, quantity, frequency, unit, or outcome is false.
-- Distinguish discussion, possibility, prior history, and a plan that was actually agreed.
-- Pay close attention to negation and corrections.
-- Do not infer facts that are merely plausible.
-- For each true answer, copy the smallest COMPLETE spoken sentence or utterance that proves it.
-- evidence_quote must contain spoken transcript words only. Never copy the [start-end] timestamp prefix.
-- For false answers, evidence_quote must be an empty string.
-- Return one answer for EVERY numbered question.
-- Preserve question numbering exactly.
-- Output JSON only.
+
+SYSTEM_PROMPT = '''You verify exact factual entailment in a doctor-patient dialogue.
+
+Each question is a proposition. Mark it TRUE only if the transcript explicitly establishes the whole proposition.
+
+Before deciding, compare every material slot in the question with the transcript:
+- person/entity or medicine
+- dose/number and unit
+- frequency
+- duration
+- date/time
+- body location
+- symptom/test/result
+- treatment/action/status
+
+Critical rules:
+- Topic overlap is never enough.
+- If even one material slot differs, the answer is FALSE.
+- A proposed, considered, discussed, possible, or hypothetical action is not the same as an action that actually happened or was agreed.
+- Past history is not the same as the current visit unless the question asks about history.
+- Respect negation, corrections, uncertainty, and changes of plan. The final corrected statement wins.
+- Do not use medical common sense to fill missing facts.
+- "Could", "might", "maybe", "consider", and similar language do not establish a fact unless the question itself asks about that uncertainty.
+- Numbers, doses, units, dates, medication names, body sites, and frequencies must match exactly in meaning.
+
+For every question return one reason_code:
+- exact_support: every material part is explicitly supported
+- wrong_entity: wrong person, medicine, test, diagnosis, or other entity
+- wrong_value: wrong dose, amount, result, quantity, frequency, unit, or other value
+- wrong_time: wrong date, duration, timing, or temporal status
+- wrong_location: wrong body/anatomical location
+- negated: transcript explicitly says the proposition is not true
+- contradicted: transcript establishes an incompatible fact
+- discussed_not_done: merely discussed/proposed/considered rather than actually done/agreed
+- not_explicit: transcript does not explicitly establish enough to say yes
+- off_topic: unrelated to the conversation
+
+answer must be TRUE if and only if reason_code is exact_support.
+
+Evidence rules for TRUE answers:
+- Transcript utterances are labelled S0, S1, ...
+- Return the smallest 1 or 2 segment IDs that directly establish the proposition.
+- Copy an exact supporting spoken quote from those segment(s).
+- Do not include timestamps or segment labels in evidence_quote.
+
+For FALSE answers:
+- evidence_segment_ids must be []
+- evidence_quote must be ""
+
+Return one result for EVERY numbered question. Never omit a question. Output JSON only.
 '''
 
 
@@ -42,7 +90,10 @@ def _client(timeout_seconds: float = OLLAMA_TIMEOUT) -> httpx.Client:
 
 
 def _render_transcript(segments: list[TranscriptSegment]) -> str:
-    return '\n'.join(f'[{s.start:.2f}-{s.end:.2f}] {s.text}' for s in segments)
+    return '\n'.join(
+        f'[S{s.id} {s.start:.2f}-{s.end:.2f}] {s.text}'
+        for s in segments
+    )
 
 
 def _answer_schema(question_count: int) -> dict:
@@ -50,16 +101,27 @@ def _answer_schema(question_count: int) -> dict:
         'type': 'object',
         'properties': {
             'answer': {'type': 'boolean'},
+            'reason_code': {
+                'type': 'string',
+                'enum': REASON_CODES,
+            },
+            'evidence_segment_ids': {
+                'type': 'array',
+                'items': {'type': 'integer', 'minimum': 0},
+                'maxItems': 2,
+            },
             'evidence_quote': {'type': 'string'},
         },
-        'required': ['answer', 'evidence_quote'],
+        'required': [
+            'answer',
+            'reason_code',
+            'evidence_segment_ids',
+            'evidence_quote',
+        ],
         'additionalProperties': False,
     }
 
-    properties = {
-        str(i): answer_schema
-        for i in range(question_count)
-    }
+    properties = {str(i): answer_schema for i in range(question_count)}
 
     return {
         'type': 'object',
@@ -106,7 +168,7 @@ def warmup() -> None:
     ) from last_error
 
 
-def answer_questions(
+def _run_batch(
     segments: list[TranscriptSegment],
     questions: list[str],
 ) -> LLMAnswerBatch:
@@ -122,9 +184,7 @@ QUESTIONS:
 Return a JSON object with exactly these keys:
 {", ".join(str(i) for i in range(len(questions)))}
 
-Each key must contain exactly:
-- answer: boolean
-- evidence_quote: string
+For each question, first identify whether EVERY material factual slot matches the transcript. Then select the single best reason_code. answer must agree with reason_code: only exact_support is true.
 
 Do not omit any key.'''
 
@@ -136,7 +196,7 @@ Do not omit any key.'''
         'format': _answer_schema(len(questions)),
         'options': {
             'temperature': 0,
-            'num_predict': 1800,
+            'num_predict': 2200,
             'num_ctx': OLLAMA_NUM_CTX,
         },
         'messages': [
@@ -151,15 +211,53 @@ Do not omit any key.'''
         content = response.json()['message']['content']
 
     raw = json.loads(content)
-
     expected_keys = [str(i) for i in range(len(questions))]
     if set(raw.keys()) != set(expected_keys):
         raise ValueError(
             f'LLM returned keys {sorted(raw.keys())}; expected {expected_keys}'
         )
 
-    answers = [
-        LLMAnswer.model_validate(raw[str(i)])
-        for i in range(len(questions))
-    ]
+    answers = []
+    max_segment_id = len(segments) - 1
+
+    for i in range(len(questions)):
+        item = LLMAnswer.model_validate(raw[str(i)])
+
+        # Make the structured reason authoritative so contradictory JSON cannot
+        # accidentally turn a hard negative into a positive.
+        item.answer = item.reason_code == 'exact_support'
+
+        if item.answer:
+            item.evidence_segment_ids = [
+                sid
+                for sid in item.evidence_segment_ids
+                if 0 <= sid <= max_segment_id
+            ][:2]
+        else:
+            item.evidence_segment_ids = []
+            item.evidence_quote = ''
+
+        answers.append(item)
+
     return LLMAnswerBatch(answers=answers)
+
+
+def answer_questions(
+    segments: list[TranscriptSegment],
+    questions: list[str],
+) -> LLMAnswerBatch:
+    # Structured generation should normally succeed on the first call. A second
+    # deterministic call protects a whole conversation from an occasional
+    # malformed/partial generation without adding latency to the normal path.
+    last_error = None
+    for attempt in range(2):
+        try:
+            return _run_batch(segments, questions)
+        except (ValueError, json.JSONDecodeError, KeyError) as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(0.1)
+
+    raise RuntimeError(
+        f'LLM structured output failed twice: {last_error}'
+    ) from last_error
