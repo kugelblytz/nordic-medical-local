@@ -1,3 +1,4 @@
+import json
 import time
 
 import httpx
@@ -10,7 +11,7 @@ from config import (
     OLLAMA_URL,
     OLLAMA_WARMUP_TIMEOUT,
 )
-from models import LLMAnswerBatch, TranscriptSegment
+from models import LLMAnswer, LLMAnswerBatch, TranscriptSegment
 
 
 SYSTEM_PROMPT = '''You are solving a medical-dialogue evidence verification task.
@@ -25,7 +26,8 @@ Rules:
 - For each true answer, copy the smallest COMPLETE spoken sentence or utterance that proves it.
 - evidence_quote must contain spoken transcript words only. Never copy the [start-end] timestamp prefix.
 - For false answers, evidence_quote must be an empty string.
-- Preserve question order.
+- Return one answer for EVERY numbered question.
+- Preserve question numbering exactly.
 - Output JSON only.
 '''
 
@@ -43,6 +45,30 @@ def _render_transcript(segments: list[TranscriptSegment]) -> str:
     return '\n'.join(f'[{s.start:.2f}-{s.end:.2f}] {s.text}' for s in segments)
 
 
+def _answer_schema(question_count: int) -> dict:
+    answer_schema = {
+        'type': 'object',
+        'properties': {
+            'answer': {'type': 'boolean'},
+            'evidence_quote': {'type': 'string'},
+        },
+        'required': ['answer', 'evidence_quote'],
+        'additionalProperties': False,
+    }
+
+    properties = {
+        str(i): answer_schema
+        for i in range(question_count)
+    }
+
+    return {
+        'type': 'object',
+        'properties': properties,
+        'required': list(properties.keys()),
+        'additionalProperties': False,
+    }
+
+
 def warmup() -> None:
     payload = {
         'model': OLLAMA_MODEL,
@@ -53,6 +79,7 @@ def warmup() -> None:
             'type': 'object',
             'properties': {'ok': {'type': 'boolean'}},
             'required': ['ok'],
+            'additionalProperties': False,
         },
         'options': {
             'temperature': 0,
@@ -92,17 +119,24 @@ def answer_questions(
 QUESTIONS:
 {numbered}
 
-Return exactly {len(questions)} answers.'''
+Return a JSON object with exactly these keys:
+{", ".join(str(i) for i in range(len(questions)))}
+
+Each key must contain exactly:
+- answer: boolean
+- evidence_quote: string
+
+Do not omit any key.'''
 
     payload = {
         'model': OLLAMA_MODEL,
         'stream': False,
         'think': False,
         'keep_alive': OLLAMA_KEEP_ALIVE,
-        'format': LLMAnswerBatch.model_json_schema(),
+        'format': _answer_schema(len(questions)),
         'options': {
             'temperature': 0,
-            'num_predict': 1400,
+            'num_predict': 1800,
             'num_ctx': OLLAMA_NUM_CTX,
         },
         'messages': [
@@ -116,10 +150,16 @@ Return exactly {len(questions)} answers.'''
         response.raise_for_status()
         content = response.json()['message']['content']
 
-    batch = LLMAnswerBatch.model_validate_json(content)
-    if len(batch.answers) != len(questions):
+    raw = json.loads(content)
+
+    expected_keys = [str(i) for i in range(len(questions))]
+    if set(raw.keys()) != set(expected_keys):
         raise ValueError(
-            f'LLM returned {len(batch.answers)} answers '
-            f'for {len(questions)} questions'
+            f'LLM returned keys {sorted(raw.keys())}; expected {expected_keys}'
         )
-    return batch
+
+    answers = [
+        LLMAnswer.model_validate(raw[str(i)])
+        for i in range(len(questions))
+    ]
+    return LLMAnswerBatch(answers=answers)
