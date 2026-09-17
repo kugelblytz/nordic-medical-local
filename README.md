@@ -139,3 +139,101 @@ Real GPU/model throughput still needs to be measured on the target VM because it
 5. Test Qwen3 8B against a larger local model only if latency and VRAM allow it.
 
 The competition rules prohibit cloud APIs during inference, so both ASR and question answering stay local.
+
+
+## Vast.ai deployment
+
+Vast.ai normally gives you a Docker container on a rented GPU host. You do not need to build or publish a custom image for this repo.
+
+### Recommended instance
+
+Choose an **on-demand** instance with one of:
+
+- RTX 3090 24 GB
+- RTX 4090 24 GB
+- A10 24 GB
+- T4 16 GB only if it is much cheaper
+
+Use a standard CUDA/PyTorch SSH template. At least 40 GB disk is recommended.
+
+### Required port mapping
+
+Expose container port **9054/tcp** in the Vast template/container settings.
+
+The external host port may be different from 9054. Vast will show the actual public mapping after the instance starts.
+
+### Deploy
+
+SSH into the instance using the command shown by Vast, then:
+
+```bash
+git clone git@github.com:kugelblytz/nordic-medical-local.git
+cd nordic-medical-local
+chmod +x vast_start.sh run_gpu.sh vast_health.sh
+./vast_start.sh
+```
+
+The script will:
+
+1. verify the NVIDIA GPU
+2. create the Python virtual environment
+3. install Python and CUDA runtime dependencies
+4. install Ollama if needed
+5. start Ollama in the background
+6. pull `qwen3:8b`
+7. load/warm Whisper and Qwen
+8. start FastAPI on `0.0.0.0:9054`
+
+First startup downloads several GB of model weights.
+
+### Verify inside the container
+
+In another SSH session:
+
+```bash
+cd nordic-medical-local
+chmod +x vast_health.sh
+./vast_health.sh
+```
+
+You should see the GPU plus successful Ollama and competition API health checks.
+
+### Verify from your laptop
+
+In the Vast instance page, find the public IP and host port that map to container port 9054.
+
+For example, if Vast shows:
+
+```text
+203.0.113.20:32145 -> 9054/tcp
+```
+
+test:
+
+```bash
+curl http://203.0.113.20:32145/api
+```
+
+and use this as the evaluator URL:
+
+```text
+http://203.0.113.20:32145/predict
+```
+
+### Run the official evaluator
+
+From the organizer's `medical-appointment` directory on your laptop:
+
+```bash
+python local_evaluator.py \
+  --url http://<VAST_PUBLIC_IP>:<VAST_HOST_PORT>/predict \
+  --verbose
+```
+
+### Cleanup
+
+When finished, **Delete/Destroy the Vast instance** rather than only stopping it.
+
+Stopping can leave storage allocated depending on the rental/setup. Destroying the instance is the clean end state for a disposable benchmark.
+
+Do not keep important data only on the instance; destroying it removes the container's local data.
