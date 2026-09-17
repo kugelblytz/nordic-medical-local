@@ -1,9 +1,9 @@
-from evidence import locate_quote
+from evidence import locate_evidence, locate_quote
 from models import TranscriptSegment, WordToken
 
 
-def test_exact_quote_maps_to_word_span():
-    seg = TranscriptSegment(
+def sample_segment():
+    return TranscriptSegment(
         id=0,
         start=10.0,
         end=15.0,
@@ -16,4 +16,18 @@ def test_exact_quote_maps_to_word_span():
             WordToken(text='daily.', start=12.0, end=12.4),
         ],
     )
-    assert locate_quote([seg], '100 milligrams once daily') == (10.5, 12.4)
+
+
+def test_exact_quote_maps_to_word_span():
+    assert locate_quote(
+        [sample_segment()],
+        '100 milligrams once daily',
+    ) == (10.5, 12.4)
+
+
+def test_segment_evidence_uses_segment_boundary_with_padding():
+    assert locate_evidence(
+        [sample_segment()],
+        '100 milligrams once daily',
+        mode='segment',
+    ) == (9.8, 15.2)
