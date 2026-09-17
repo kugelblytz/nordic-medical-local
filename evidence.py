@@ -67,11 +67,42 @@ def locate_quote(segments: list[TranscriptSegment], quote: str):
     return words[start][1], words[start + width - 1][2]
 
 
+def _segment_span(
+    segments: list[TranscriptSegment],
+    segment_ids: list[int],
+):
+    valid = sorted({
+        sid
+        for sid in segment_ids
+        if 0 <= sid < len(segments)
+    })
+    if not valid:
+        return None, None
+
+    # Avoid accidentally returning a huge interval if the model selects two
+    # unrelated utterances.
+    if len(valid) == 2 and valid[1] - valid[0] > 1:
+        valid = valid[:1]
+
+    start = segments[valid[0]].start
+    end = segments[valid[-1]].end
+    return (
+        max(0.0, start - EVIDENCE_PAD_SECONDS),
+        end + EVIDENCE_PAD_SECONDS,
+    )
+
+
 def locate_evidence(
     segments: list[TranscriptSegment],
     quote: str,
+    segment_ids: list[int] | None = None,
     mode: str = EVIDENCE_MODE,
 ):
+    if segment_ids:
+        start, end = _segment_span(segments, segment_ids)
+        if start is not None:
+            return start, end
+
     match = _find_quote_window(segments, quote)
     if match is None:
         return None, None
