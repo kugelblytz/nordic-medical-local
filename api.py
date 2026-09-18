@@ -4,7 +4,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from asr import warmup as warmup_asr
-from config import HOST, PORT, WARMUP_ON_START
+from config import HOST, LLM_PROVIDER, PORT, WARMUP_ON_START
 from llm import warmup as warmup_llm
 from models import ASRQuestionRequestDto, ASRQuestionResponseDto
 from predictor import predict
@@ -22,7 +22,7 @@ def startup() -> None:
 
     log.info('Loading Whisper...')
     warmup_asr()
-    log.info('Warming Ollama model...')
+    log.info('Initializing %s LLM backend...', LLM_PROVIDER)
     warmup_llm()
     log.info('Models ready.')
 
@@ -34,7 +34,7 @@ def root():
 
 @app.get('/api')
 def api_status():
-    return {'service': 'medical-appointment-usecase', 'status': 'ok'}
+    return {'service': 'medical-appointment-usecase', 'status': 'ok', 'llm_provider': LLM_PROVIDER}
 
 
 @app.post('/predict', response_model=ASRQuestionResponseDto)
