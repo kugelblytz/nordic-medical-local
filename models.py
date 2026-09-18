@@ -36,11 +36,6 @@ class TranscriptSegment(BaseModel):
     words: List[WordToken] = Field(default_factory=list)
 
 
-class MedicalFact(BaseModel):
-    fact: str
-    segment_ids: List[int] = Field(default_factory=list)
-
-
 class LLMAnswer(BaseModel):
     answer: bool
     reason_code: str = 'not_explicit'
