@@ -1,7 +1,11 @@
 import re
 from difflib import SequenceMatcher
 
-from config import EVIDENCE_MODE, EVIDENCE_PAD_SECONDS
+from config import (
+    EVIDENCE_MODE,
+    EVIDENCE_PAD_SECONDS,
+    EVIDENCE_QUOTE_PAD_SECONDS,
+)
 from models import TranscriptSegment
 
 
@@ -35,10 +39,13 @@ def _find_quote_window(segments: list[TranscriptSegment], quote: str):
     tokens = [word[0] for word in words]
     width = len(query)
 
+    # Prefer an exact token match.
     for start in range(0, len(tokens) - width + 1):
         if tokens[start:start + width] == query:
             return words, start, width
 
+    # Whisper and the LLM may differ slightly on punctuation, contractions,
+    # names or one short word. Search only windows close to the quote length.
     best = None
     query_text = ' '.join(query)
     for window_width in range(
@@ -67,28 +74,65 @@ def locate_quote(segments: list[TranscriptSegment], quote: str):
     return words[start][1], words[start + width - 1][2]
 
 
+def _segments_by_id(
+    segments: list[TranscriptSegment],
+    segment_ids: list[int] | None,
+) -> list[TranscriptSegment]:
+    if not segment_ids:
+        return []
+
+    wanted = set(segment_ids)
+    selected = [seg for seg in segments if seg.id in wanted]
+    selected.sort(key=lambda seg: seg.start)
+
+    # If the model selects two unrelated utterances, keep only the first rather
+    # than returning a giant interval between them.
+    if (
+        len(selected) == 2
+        and abs(selected[1].id - selected[0].id) > 1
+    ):
+        selected = selected[:1]
+
+    return selected
+
+
 def _segment_span(
     segments: list[TranscriptSegment],
     segment_ids: list[int],
 ):
-    valid = sorted({
-        sid
-        for sid in segment_ids
-        if 0 <= sid < len(segments)
-    })
-    if not valid:
+    selected = _segments_by_id(segments, segment_ids)
+    if not selected:
         return None, None
 
-    # Avoid accidentally returning a huge interval if the model selects two
-    # unrelated utterances.
-    if len(valid) == 2 and valid[1] - valid[0] > 1:
-        valid = valid[:1]
-
-    start = segments[valid[0]].start
-    end = segments[valid[-1]].end
     return (
-        max(0.0, start - EVIDENCE_PAD_SECONDS),
-        end + EVIDENCE_PAD_SECONDS,
+        max(0.0, selected[0].start - EVIDENCE_PAD_SECONDS),
+        selected[-1].end + EVIDENCE_PAD_SECONDS,
+    )
+
+
+def _tight_quote_span(
+    segments: list[TranscriptSegment],
+    quote: str,
+    segment_ids: list[int],
+):
+    # The LLM has already told us which utterance(s) support the answer.
+    # Restrict matching to those utterances so a repeated phrase elsewhere in
+    # the consultation cannot steal the evidence timestamp.
+    selected = _segments_by_id(segments, segment_ids)
+    if not selected or not quote.strip():
+        return None, None
+
+    match = _find_quote_window(selected, quote)
+    if match is None:
+        return None, None
+
+    words, start, width = match
+    evidence_start = words[start][1]
+    evidence_end = words[start + width - 1][2]
+
+    return (
+        max(0.0, evidence_start - EVIDENCE_QUOTE_PAD_SECONDS),
+        evidence_end + EVIDENCE_QUOTE_PAD_SECONDS,
     )
 
 
@@ -98,11 +142,21 @@ def locate_evidence(
     segment_ids: list[int] | None = None,
     mode: str = EVIDENCE_MODE,
 ):
+    # Preferred path: Qwen selects the supporting S# utterance and gives an
+    # exact quote. Use Whisper word timestamps inside that utterance for a tight
+    # span. This directly improves temporal IoU without changing classification.
     if segment_ids:
+        start, end = _tight_quote_span(segments, quote, segment_ids)
+        if start is not None:
+            return start, end
+
+        # Fail safe: a valid segment selection is still useful even if the quote
+        # cannot be aligned exactly.
         start, end = _segment_span(segments, segment_ids)
         if start is not None:
             return start, end
 
+    # Legacy fallback for answers without usable segment IDs.
     match = _find_quote_window(segments, quote)
     if match is None:
         return None, None
