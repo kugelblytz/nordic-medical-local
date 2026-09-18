@@ -22,6 +22,7 @@ OLLAMA_NUM_CTX = int(os.getenv('OLLAMA_NUM_CTX', '8192'))
 
 EVIDENCE_MODE = os.getenv('EVIDENCE_MODE', 'segment').strip().lower()
 EVIDENCE_PAD_SECONDS = float(os.getenv('EVIDENCE_PAD_SECONDS', '0.20'))
+EVIDENCE_QUOTE_PAD_SECONDS = float(os.getenv('EVIDENCE_QUOTE_PAD_SECONDS', '0.12'))
 
 WARMUP_ON_START = _env_bool('WARMUP_ON_START', True)
 
