@@ -1,10 +1,92 @@
 # Nordic AI Cup 2026 — Medical Appointment local starter
 
-A local inference implementation for the **Medical Appointment** use case:
+A local inference implementation for the **Medical Appointment** use case.
 
-**MP3 → faster-whisper → local Qwen3 14B via Ollama → contrastive entailment → segment evidence → timestamp span**
+**Best-known competition configuration:**
 
-No cloud API is used during `/predict`.
+**MP3 → faster-whisper large-v3-turbo → local Qwen3.5 27B via Ollama → strict single-pass entailment → segment selection + exact quote → Whisper word timestamps**
+
+No cloud API is used during `/predict` on the competition configuration.
+
+## Best-known result: 0.741486 hidden validation
+
+The strongest online validation result observed so far is:
+
+```text
+score: 0.7414863491598819
+attempt: a21da8ecbab444d9a24f29b810608b75
+validation conversations: 19
+errors: []
+```
+
+The validation run started at `2026-09-18T00:34:55Z` and finished at `2026-09-18T00:42:14Z`, or about **23.1 seconds per conversation on average**. This was comfortably within the competition's 60-second-per-conversation average budget.
+
+### Architecture that produced the 0.741486 score
+
+1. **ASR — faster-whisper `large-v3-turbo`**
+   - CUDA + float16
+   - English forced
+   - beam size 5
+   - VAD enabled
+   - word timestamps enabled
+   - each Whisper segment is assigned an `S#` ID
+
+2. **Reasoning — Qwen3.5 27B through Ollama**
+   - one request for all 10 questions from a conversation
+   - 8192-token context
+   - temperature 0
+   - Ollama thinking disabled
+   - strict JSON schema with one result per question
+   - the model must classify each question using one of:
+     - `exact_support`
+     - `wrong_entity`
+     - `wrong_value`
+     - `wrong_time`
+     - `wrong_location`
+     - `negated`
+     - `contradicted`
+     - `discussed_not_done`
+     - `not_explicit`
+     - `off_topic`
+   - a question is TRUE only when the reason code is `exact_support`
+
+3. **Hard-negative handling**
+   - the prompt explicitly compares material slots such as medicine/entity, dose, unit, frequency, duration, date/time, body location, symptom/test/result, treatment/action, and status
+   - one material mismatch is enough to make the proposition false
+   - proposed/discussed treatment is not treated as completed treatment
+   - past history is not treated as current state
+   - negation, corrections, and plan changes are handled explicitly
+
+4. **Evidence selection**
+   - for TRUE answers, Qwen returns the smallest 1–2 supporting Whisper segment IDs plus an exact spoken quote
+   - the evidence matcher first searches for that quote **inside the selected segment(s)**, preventing repeated phrases elsewhere in the conversation from stealing the timestamp
+   - exact token matching is attempted first, followed by a conservative fuzzy match
+   - when a quote matches, Whisper word timestamps produce a tight evidence span with `0.12 s` padding
+   - if quote alignment fails, the selected segment span is used as a safe fallback with `0.20 s` padding
+
+5. **Failure behavior**
+   - malformed/missing structured output is retried once
+   - if the full prediction pipeline fails, the API still returns arrays of the correct length using an all-false/null fallback
+
+### Why this became the best configuration
+
+The development path gave several useful signals:
+
+- the original broken/failed path scored exactly **0.200**, which exposed an all-false fallback caused by malformed model output
+- moving to strict keyed structured output and a larger Qwen model produced about **0.69625** on hidden validation
+- switching Whisper from `large-v3-turbo` to full `large-v3` did not produce a meaningful improvement in the observed validation result
+- a multi-pass fact-ledger / adversarial-verifier reasoning pipeline **reduced** validation performance, so the system returned to one strict entailment pass
+- the combination of **Qwen3.5 27B + the tighter evidence pipeline** produced the current best **0.741486** score
+
+This is not a pure model-size A/B test because the 27B run also included evidence-localization improvements. The safest interpretation is that the current combination is the best observed system, not that every point of improvement came from the larger LLM alone.
+
+### Important distinction: hidden validation vs local training evaluation
+
+The `0.741486` score above is from the competition's **hidden online validation set**.
+
+A separate development experiment using GPT-5.6 Sol on the supplied 39-conversation training set achieved very high classification accuracy but only moderate evidence tIoU. That experiment is useful for diagnosing the remaining bottleneck, but its `0.697` local score is **not directly comparable** with the hidden-validation `0.741486` because the datasets differ.
+
+The strongest current lesson is that **classification can become nearly saturated while evidence localization still limits the final score**, which matters because tIoU contributes 60% of the competition metric.
 
 ## Competition contract
 
@@ -95,7 +177,7 @@ Open TCP 9054 in the VM's Network Security Group before testing remotely.
 
 Important defaults:
 
-- `ASR_MODEL=large-v3`
+- `ASR_MODEL=large-v3-turbo`
 - `ASR_DEVICE=cuda`
 - `ASR_COMPUTE_TYPE=float16`
 - `OLLAMA_MODEL=qwen3.5:27b`
@@ -132,11 +214,11 @@ Real GPU/model throughput still needs to be measured on the target VM because it
 
 ## Optimization order
 
-1. Run the 390 supplied training questions and record score + worst-case latency.
-2. Inspect errors by `positive`, `hard_negative`, and `off_topic`.
-3. Compare `EVIDENCE_MODE=segment` against `word`.
-4. Benchmark Whisper `large-v3` against `large-v3-turbo` if latency becomes tight.
-5. Test Qwen3 8B against a larger local model only if latency and VRAM allow it.
+1. Preserve the current Qwen3.5 27B / Whisper turbo configuration as the hidden-validation baseline.
+2. Measure local errors separately for classification and evidence localization.
+3. Inspect zero/low-tIoU positives with their selected segment IDs, evidence quote, predicted span, and gold span.
+4. Tune evidence alignment/padding before changing the classifier, because evidence carries 60% of the score.
+5. Change one variable at a time when testing larger local models, alternate prompts, or ASR variants.
 
 The competition rules prohibit cloud APIs during inference, so both ASR and question answering stay local.
 
