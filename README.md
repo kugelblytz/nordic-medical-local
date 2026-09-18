@@ -45,7 +45,7 @@ Install Ollama and pull Qwen3:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:14b
+ollama pull qwen3.5:27b
 sudo systemctl enable --now ollama
 ```
 
@@ -98,7 +98,7 @@ Important defaults:
 - `ASR_MODEL=large-v3`
 - `ASR_DEVICE=cuda`
 - `ASR_COMPUTE_TYPE=float16`
-- `OLLAMA_MODEL=qwen3:14b`
+- `OLLAMA_MODEL=qwen3.5:27b`
 - `EVIDENCE_MODE=segment`
 - `EVIDENCE_PAD_SECONDS=0.20`
 - `WARMUP_ON_START=true`
@@ -180,7 +180,7 @@ The script will:
 3. install Python and CUDA runtime dependencies
 4. install Ollama if needed
 5. start Ollama in the background
-6. pull `qwen3:14b`
+6. pull `qwen3.5:27b`
 7. load/warm Whisper and Qwen
 8. start FastAPI on `0.0.0.0:9054`
 
