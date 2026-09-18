@@ -1,3 +1,54 @@
+# OpenAI reasoning experiment branch
+
+This branch adds a **development-only** OpenAI reasoning backend while keeping the normal Ollama backend available. Use it only with the official **local evaluator**. Do not use the OpenAI backend for the competition's online validation/evaluation, because the competition rules prohibit cloud API calls during `/predict`.
+
+## Vast quickstart for the OpenAI experiment
+
+Checkout this branch on Vast:
+
+```bash
+cd /workspace/nordic-medical-local
+git fetch origin
+git switch experiment/openai-sol
+git pull
+```
+
+Set the API key only in the shell environment. **Do not put a real key in Git, `.env.example`, a command screenshot, or chat.**
+
+```bash
+export OPENAI_API_KEY='YOUR_KEY_HERE'
+export OPENAI_MODEL=gpt-5.6-sol
+export OPENAI_REASONING=high
+
+pkill -f "python3 api.py" || true
+bash run_openai_experiment.sh
+```
+
+The experiment keeps Whisper `large-v3-turbo` on the Vast GPU, sends only the resulting transcript/questions to the OpenAI Responses API, and preserves the same structured answer/evidence schema used by the local model.
+
+Confirm the active backend:
+
+```bash
+curl http://127.0.0.1:9054/api
+```
+
+It should include:
+
+```json
+{"service":"medical-appointment-usecase","status":"ok","llm_provider":"openai"}
+```
+
+Then run the official evaluator from your own computer:
+
+```cmd
+cd Nordic-AI-Cup-2026\medical-appointment
+python local_evaluator.py --url http://194.26.196.159:15983/predict --verbose
+```
+
+To leave experiment mode, switch back to `main` and restart the normal Ollama deployment.
+
+---
+
 # Nordic AI Cup 2026 — Medical Appointment local starter
 
 A local inference implementation for the **Medical Appointment** use case:
