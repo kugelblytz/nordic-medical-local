@@ -102,3 +102,24 @@ def test_choose_by_score_has_deterministic_original_order_tie_break():
         question_features=q,
     )
     assert selected["source"] == "first"
+
+
+def test_direct_script_help_runs_from_repo_root():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "experiments/evidence_candidate_features.py",
+            "--help",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--candidate-results" in result.stdout
