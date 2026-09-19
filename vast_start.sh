@@ -76,4 +76,4 @@ echo "== Starting Nordic Medical API on 0.0.0.0:$PORT =="
 echo "Vast will expose this through the host port mapped to container port $PORT."
 echo "Logs from Ollama: $ROOT/.vast/logs/ollama.log"
 echo
-exec ./run_gpu.sh
+exec bash ./run_gpu.sh
