@@ -301,7 +301,7 @@ def load_diagnostics(path: Path) -> list[dict[str, Any]]:
     payloads = []
     for file_path in files:
         payload = json.loads(file_path.read_text(encoding='utf-8'))
-        if payload.get('schema_version') != 1:
+        if payload.get('schema_version') not in {1, 2}:
             raise ValueError(
                 f'Unsupported diagnostics schema in {file_path}: '
                 f"{payload.get('schema_version')}"
@@ -366,6 +366,15 @@ def build_rows(
             gold_end = gold['_gold_end']
             pred_start = prediction.get('resolved_evidence_start')
             pred_end = prediction.get('resolved_evidence_end')
+            first_pred_start = prediction.get(
+                'first_pass_resolved_evidence_start',
+                pred_start,
+            )
+            first_pred_end = prediction.get(
+                'first_pass_resolved_evidence_end',
+                pred_end,
+            )
+            refinement = prediction.get('refinement') or {}
 
             row: dict[str, Any] = {
                 'audio_filename': payload['audio_filename'],
@@ -395,6 +404,22 @@ def build_rows(
                 'gold_end': gold_end,
                 'pred_start': pred_start,
                 'pred_end': pred_end,
+                'first_pass_pred_start': first_pred_start,
+                'first_pass_pred_end': first_pred_end,
+                'refinement_attempted': bool(
+                    refinement.get('attempted', False)
+                ),
+                'refinement_valid': bool(refinement.get('valid', False)),
+                'refinement_used': bool(refinement.get('used', False)),
+                'refinement_changed_range': bool(
+                    prediction.get('refinement_changed_range', False)
+                ),
+                'refined_start_word_id': refinement.get('start_word_id'),
+                'refined_end_word_id': refinement.get('end_word_id'),
+                'refined_selected_word_text': refinement.get(
+                    'selected_word_text',
+                    '',
+                ),
                 'gold_duration': (
                     gold_end - gold_start
                     if gold_start is not None and gold_end is not None
@@ -415,6 +440,12 @@ def build_rows(
                     gold_start,
                     gold_end,
                 )
+                first_pass_score = tiou(
+                    first_pred_start,
+                    first_pred_end,
+                    gold_start,
+                    gold_end,
+                )
                 word_oracle = _best_word_oracle(
                     payload['words'],
                     gold_start,
@@ -430,6 +461,8 @@ def build_rows(
                 row.update(
                     {
                         'tiou': score,
+                        'first_pass_tiou': first_pass_score,
+                        'refinement_delta_tiou': score - first_pass_score,
                         'tiou_bucket': _tiou_bucket(score),
                         'failure_category': _failure_category(
                             predicted_answer,
@@ -475,6 +508,8 @@ def build_rows(
                 row.update(
                     {
                         'tiou': None,
+                        'first_pass_tiou': None,
+                        'refinement_delta_tiou': None,
                         'tiou_bucket': '',
                         'failure_category': '',
                         'start_error_s': None,
@@ -516,6 +551,12 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
 
     tiou_values = [float(row['tiou']) for row in positives]
+    first_pass_tiou_values = [
+        float(row['first_pass_tiou']) for row in positives
+    ]
+    refinement_deltas = [
+        float(row['refinement_delta_tiou']) for row in positives
+    ]
     diag_tiou_values = [
         float(row['tiou']) for row in predicted_yes_positives
     ]
@@ -578,6 +619,44 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         'positives': len(positives),
         'mean_tiou': mean_tiou,
         'median_tiou': _median(tiou_values),
+        'refinement': {
+            'first_pass_mean_tiou': _mean(first_pass_tiou_values),
+            'final_mean_tiou': mean_tiou,
+            'mean_delta_tiou': _mean(refinement_deltas),
+            'improved_questions': sum(
+                delta > 1e-9 for delta in refinement_deltas
+            ),
+            'unchanged_questions': sum(
+                abs(delta) <= 1e-9 for delta in refinement_deltas
+            ),
+            'degraded_questions': sum(
+                delta < -1e-9 for delta in refinement_deltas
+            ),
+            'improved_by_at_least_0_10': sum(
+                delta >= 0.10 for delta in refinement_deltas
+            ),
+            'degraded_by_at_least_0_10': sum(
+                delta <= -0.10 for delta in refinement_deltas
+            ),
+            'baseline_zero_tiou': sum(
+                float(row['first_pass_tiou']) <= 1e-12
+                for row in positives
+            ),
+            'final_zero_tiou': sum(
+                float(row['tiou']) <= 1e-12 for row in positives
+            ),
+            'baseline_good_count': sum(
+                float(row['first_pass_tiou']) >= 0.75
+                for row in positives
+            ),
+            'baseline_good_mean_delta': _mean(
+                [
+                    float(row['refinement_delta_tiou'])
+                    for row in positives
+                    if float(row['first_pass_tiou']) >= 0.75
+                ]
+            ),
+        },
         'tiou_when_answered_yes': _mean(diag_tiou_values),
         'zero_tiou_positives': sum(
             float(row['tiou']) <= 1e-12 for row in positives
@@ -667,6 +746,17 @@ def write_csv(rows: list[dict[str, Any]], path: Path) -> None:
         'gold_end',
         'pred_start',
         'pred_end',
+        'first_pass_pred_start',
+        'first_pass_pred_end',
+        'first_pass_tiou',
+        'refinement_delta_tiou',
+        'refinement_attempted',
+        'refinement_valid',
+        'refinement_used',
+        'refinement_changed_range',
+        'refined_start_word_id',
+        'refined_end_word_id',
+        'refined_selected_word_text',
         'gold_duration',
         'pred_duration',
         'tiou',
@@ -799,6 +889,32 @@ def print_summary(summary: dict[str, Any]) -> None:
     print(
         f"  tIoU when answered yes            "
         f"{(summary['tiou_when_answered_yes'] or 0.0):.3f}"
+    )
+    print()
+    print('Refinement A/B')
+    refinement = summary['refinement']
+    print(
+        f"  first-pass mean tIoU              "
+        f"{(refinement['first_pass_mean_tiou'] or 0.0):.3f}"
+    )
+    print(
+        f"  final mean tIoU                   "
+        f"{(refinement['final_mean_tiou'] or 0.0):.3f}"
+    )
+    print(
+        f"  mean delta                        "
+        f"{(refinement['mean_delta_tiou'] or 0.0):+.3f}"
+    )
+    print(
+        f"  improved / unchanged / degraded   "
+        f"{refinement['improved_questions']} / "
+        f"{refinement['unchanged_questions']} / "
+        f"{refinement['degraded_questions']}"
+    )
+    print(
+        f"  zero tIoU before / after          "
+        f"{refinement['baseline_zero_tiou']} / "
+        f"{refinement['final_zero_tiou']}"
     )
     print(
         f"  zero-tIoU positives               "
