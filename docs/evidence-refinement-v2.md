@@ -148,3 +148,117 @@ overall mean improvement should not come from damaging many already-good spans.
 
 Do not combine this A/B with batched Whisper, beam-size changes, model-size
 changes, global padding, or a different classification prompt.
+
+
+## Performance timing diagnostics
+
+Diagnostics schema v3 records performance measurements for every conversation.
+The primary runtime metric is `request_core_ms`, which stops immediately before
+research diagnostic-file serialization and therefore approximates competition
+runtime without diagnostic disk I/O.
+
+Per conversation, the JSON includes:
+
+```text
+request_core_ms
+base64_decode_ms
+
+asr:
+  total_ms
+  model_load_ms
+  temp_file_write_ms
+  whisper_materialize_ms
+  temp_file_cleanup_ms
+  audio_duration_s
+  realtime_factor
+  segment_count
+  word_count
+
+pass1 / pass2:
+  total_wall_ms
+  prompt_build_ms
+  http_wall_ms
+  parse_validate_ms
+  retry_count
+  first_attempt_success
+  attempts[]
+
+  ollama:
+    total_ms
+    load_ms
+    prompt_eval_ms
+    eval_ms
+    prompt_tokens
+    output_tokens
+    prompt_tokens_per_s
+    output_tokens_per_s
+
+evidence_resolution_ms
+evidence_counts
+unaccounted_ms
+
+diagnostics:
+  payload_build_ms
+  json_serialize_ms
+  pre_write_total_ms
+```
+
+Whisper's timer covers full iteration of faster-whisper's lazy segment iterator,
+not only the initial `transcribe()` call.
+
+Ollama durations come from the completed local Ollama response and are converted
+from nanoseconds to milliseconds. Retries remain separate attempt records.
+
+Run the aggregate timing report after the evaluator:
+
+```bash
+python diagnostics/analyze_timing.py \
+  --diagnostics-dir .diagnostics/evidence-refinement-v2
+```
+
+This writes:
+
+```text
+.diagnostics/evidence-refinement-v2/analysis/timing_summary.json
+.diagnostics/evidence-refinement-v2/analysis/timing_by_conversation.csv
+```
+
+and prints mean/p50/p90/max stage latency, percentage of total request time,
+Ollama prompt/decode throughput, retry counts, correlations, and the ten slowest
+conversations.
+
+For an external GPU-utilization trace, run this in a second SSH session before
+starting the evaluator:
+
+```bash
+cd /workspace/nordic-medical-local
+nvidia-smi dmon -s pucvmet -d 1 > gpu-dmon.log
+```
+
+Stop it with Ctrl+C after the benchmark.
+
+### Current RTX 4090 Vast endpoint
+
+```text
+SSH:     95.253.220.115:60346 -> 22/tcp
+API:     95.253.220.115:61806 -> 9054/tcp
+Health:  http://95.253.220.115:61806/api
+Predict: http://95.253.220.115:61806/predict
+```
+
+SSH:
+
+```bash
+ssh -p 60346 root@95.253.220.115
+```
+
+Evaluator:
+
+```cmd
+python local_evaluator.py --url http://95.253.220.115:61806/predict --verbose
+```
+
+For the first V2 quality/performance benchmark, keep the research evaluator
+timeout long enough to avoid contaminating evidence quality with timeouts. Use
+the resulting p50/p90/max `request_core_ms` values to decide whether the 4090
+already meets the official runtime envelope and which stage to optimize first.
