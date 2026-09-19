@@ -1,5 +1,6 @@
 import json
 import time
+from typing import Any
 
 import httpx
 
@@ -14,6 +15,7 @@ from config import (
     OLLAMA_WARMUP_TIMEOUT,
 )
 from models import LLMAnswer, LLMAnswerBatch, RefinedEvidence, TranscriptSegment
+from performance_metrics import elapsed_ms, extract_ollama_metrics, now_ns
 from word_index import (
     build_word_index,
     render_transcript_with_word_ids,
@@ -104,6 +106,39 @@ def _client(timeout_seconds: float = OLLAMA_TIMEOUT) -> httpx.Client:
             connect=min(5.0, timeout_seconds),
         )
     )
+
+
+def _finish_stage_timing(
+    timing: dict[str, Any] | None,
+    key: str,
+    stage_started: int,
+    attempts: list[dict[str, Any]],
+    successful_attempt: dict[str, Any] | None,
+    **extra: Any,
+) -> None:
+    if timing is None:
+        return
+
+    stage: dict[str, Any] = {
+        'total_wall_ms': elapsed_ms(stage_started),
+        'attempts': attempts,
+        'retry_count': max(0, len(attempts) - 1),
+        'first_attempt_success': bool(
+            attempts and attempts[0].get('success')
+        ),
+    }
+    if successful_attempt is not None:
+        for field in (
+            'prompt_build_ms',
+            'http_wall_ms',
+            'parse_validate_ms',
+            'ollama',
+        ):
+            if field in successful_attempt:
+                stage[field] = successful_attempt[field]
+
+    stage.update(extra)
+    timing[key] = stage
 
 
 def _render_transcript(segments: list[TranscriptSegment]) -> str:
@@ -198,7 +233,11 @@ def warmup() -> None:
 def _run_batch(
     segments: list[TranscriptSegment],
     questions: list[str],
+    attempt_timing: dict[str, Any] | None = None,
 ) -> LLMAnswerBatch:
+    run_started = now_ns()
+    prompt_started = now_ns()
+
     transcript = _render_transcript(segments)
     numbered = '\n'.join(f'{i}. {q}' for i, q in enumerate(questions))
 
@@ -236,11 +275,20 @@ Do not omit any key.'''
         ],
     }
 
+    if attempt_timing is not None:
+        attempt_timing['prompt_build_ms'] = elapsed_ms(prompt_started)
+
+    http_started = now_ns()
     with _client() as client:
         response = client.post(f'{OLLAMA_URL}/api/chat', json=payload)
         response.raise_for_status()
-        content = response.json()['message']['content']
+        response_payload = response.json()
+    if attempt_timing is not None:
+        attempt_timing['http_wall_ms'] = elapsed_ms(http_started)
+        attempt_timing['ollama'] = extract_ollama_metrics(response_payload)
 
+    parse_started = now_ns()
+    content = response_payload['message']['content']
     raw = json.loads(content)
     expected_keys = [str(i) for i in range(len(questions))]
     if set(raw.keys()) != set(expected_keys):
@@ -282,17 +330,41 @@ Do not omit any key.'''
 
         answers.append(item)
 
-    return LLMAnswerBatch(answers=answers)
+    if attempt_timing is not None:
+        attempt_timing['parse_validate_ms'] = elapsed_ms(parse_started)
+        attempt_timing['run_wall_ms'] = elapsed_ms(run_started)
 
+    return LLMAnswerBatch(answers=answers)
 
 def answer_questions(
     segments: list[TranscriptSegment],
     questions: list[str],
+    timing: dict[str, Any] | None = None,
 ) -> LLMAnswerBatch:
+    stage_started = now_ns()
+    attempts: list[dict[str, Any]] = []
     last_error = None
+
     for attempt in range(2):
+        attempt_started = now_ns()
+        attempt_timing: dict[str, Any] = {'attempt': attempt + 1}
         try:
-            return _run_batch(segments, questions)
+            result = _run_batch(
+                segments,
+                questions,
+                attempt_timing=attempt_timing,
+            )
+            attempt_timing['success'] = True
+            attempt_timing['wall_ms'] = elapsed_ms(attempt_started)
+            attempts.append(attempt_timing)
+            _finish_stage_timing(
+                timing,
+                'pass1',
+                stage_started,
+                attempts,
+                attempt_timing,
+            )
+            return result
         except (
             ValueError,
             json.JSONDecodeError,
@@ -301,9 +373,20 @@ def answer_questions(
             httpx.HTTPError,
         ) as exc:
             last_error = exc
+            attempt_timing['success'] = False
+            attempt_timing['wall_ms'] = elapsed_ms(attempt_started)
+            attempt_timing['error_type'] = type(exc).__name__
+            attempts.append(attempt_timing)
             if attempt == 0:
                 time.sleep(0.1)
 
+    _finish_stage_timing(
+        timing,
+        'pass1',
+        stage_started,
+        attempts,
+        None,
+    )
     raise RuntimeError(
         f'LLM structured output failed twice: {last_error}'
     ) from last_error
@@ -366,7 +449,9 @@ def _run_evidence_refinement(
     segments: list[TranscriptSegment],
     questions: list[str],
     first_pass: LLMAnswerBatch,
+    attempt_timing: dict[str, Any] | None = None,
 ) -> dict[int, RefinedEvidence]:
+    run_started = now_ns()
     true_indexes = [
         index
         for index, answer in enumerate(first_pass.answers)
@@ -375,6 +460,7 @@ def _run_evidence_refinement(
     if not true_indexes:
         return {}
 
+    prompt_started = now_ns()
     transcript = _render_transcript(segments)
     blocks: list[str] = []
     for index in true_indexes:
@@ -432,11 +518,20 @@ def _run_evidence_refinement(
         ],
     }
 
+    if attempt_timing is not None:
+        attempt_timing['prompt_build_ms'] = elapsed_ms(prompt_started)
+
+    http_started = now_ns()
     with _client(EVIDENCE_REFINEMENT_TIMEOUT) as client:
         response = client.post(f'{OLLAMA_URL}/api/chat', json=payload)
         response.raise_for_status()
-        content = response.json()['message']['content']
+        response_payload = response.json()
+    if attempt_timing is not None:
+        attempt_timing['http_wall_ms'] = elapsed_ms(http_started)
+        attempt_timing['ollama'] = extract_ollama_metrics(response_payload)
 
+    parse_started = now_ns()
+    content = response_payload['message']['content']
     raw = json.loads(content)
     expected_keys = {str(index) for index in true_indexes}
     if set(raw.keys()) != expected_keys:
@@ -461,30 +556,68 @@ def _run_evidence_refinement(
             item = RefinedEvidence()
         result[index] = item
 
-    return result
+    if attempt_timing is not None:
+        attempt_timing['parse_validate_ms'] = elapsed_ms(parse_started)
+        attempt_timing['run_wall_ms'] = elapsed_ms(run_started)
 
+    return result
 
 def refine_evidence(
     segments: list[TranscriptSegment],
     questions: list[str],
     first_pass: LLMAnswerBatch,
+    timing: dict[str, Any] | None = None,
 ) -> dict[int, RefinedEvidence]:
     """Run one evidence-only batch over TRUE answers.
 
     This function has no ability to alter classification. If the structured
     refinement request fails twice, callers may safely keep first-pass evidence.
     """
-    if not any(answer.answer for answer in first_pass.answers):
+    stage_started = now_ns()
+    true_question_count = sum(
+        bool(answer.answer) for answer in first_pass.answers
+    )
+
+    if true_question_count == 0:
+        _finish_stage_timing(
+            timing,
+            'pass2',
+            stage_started,
+            [],
+            None,
+            enabled=True,
+            true_question_count=0,
+            skipped=True,
+            skip_reason='no_true_questions',
+        )
         return {}
 
+    attempts: list[dict[str, Any]] = []
     last_error = None
     for attempt in range(2):
+        attempt_started = now_ns()
+        attempt_timing: dict[str, Any] = {'attempt': attempt + 1}
         try:
-            return _run_evidence_refinement(
+            result = _run_evidence_refinement(
                 segments,
                 questions,
                 first_pass,
+                attempt_timing=attempt_timing,
             )
+            attempt_timing['success'] = True
+            attempt_timing['wall_ms'] = elapsed_ms(attempt_started)
+            attempts.append(attempt_timing)
+            _finish_stage_timing(
+                timing,
+                'pass2',
+                stage_started,
+                attempts,
+                attempt_timing,
+                enabled=True,
+                true_question_count=true_question_count,
+                skipped=False,
+            )
+            return result
         except (
             ValueError,
             json.JSONDecodeError,
@@ -493,9 +626,24 @@ def refine_evidence(
             httpx.HTTPError,
         ) as exc:
             last_error = exc
+            attempt_timing['success'] = False
+            attempt_timing['wall_ms'] = elapsed_ms(attempt_started)
+            attempt_timing['error_type'] = type(exc).__name__
+            attempts.append(attempt_timing)
             if attempt == 0:
                 time.sleep(0.1)
 
+    _finish_stage_timing(
+        timing,
+        'pass2',
+        stage_started,
+        attempts,
+        None,
+        enabled=True,
+        true_question_count=true_question_count,
+        skipped=False,
+    )
     raise RuntimeError(
         f'Evidence refinement failed twice: {last_error}'
     ) from last_error
+
