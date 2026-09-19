@@ -47,3 +47,8 @@ class LLMAnswer(BaseModel):
 
 class LLMAnswerBatch(BaseModel):
     answers: List[LLMAnswer]
+
+
+class RefinedEvidence(BaseModel):
+    start_word_id: Optional[int] = None
+    end_word_id: Optional[int] = None
