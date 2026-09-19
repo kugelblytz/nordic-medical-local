@@ -2,6 +2,7 @@ import base64
 import logging
 
 from asr import transcribe
+from diagnostic_logging import write_conversation_diagnostics
 from evidence import locate_evidence, locate_word_evidence
 from llm import answer_questions
 from models import ASRQuestionRequestDto, ASRQuestionResponseDto
@@ -29,17 +30,16 @@ def predict(req: ASRQuestionRequestDto) -> ASRQuestionResponseDto:
         batch = answer_questions(segments, req.questions)
 
         answers: list[bool] = []
-        starts = []
-        ends = []
+        starts: list[float | None] = []
+        ends: list[float | None] = []
+        evidence_strategies: list[str] = []
 
         for item in batch.answers:
             answer = bool(item.answer)
             start = end = None
+            strategy = 'negative'
 
             if answer:
-                # Experimental primary path: Qwen points directly at the first
-                # and last global Whisper word IDs. The resolver maps those IDs
-                # to Whisper timestamps with no fuzzy text matching.
                 start, end = locate_word_evidence(
                     segments,
                     item.evidence_start_word_id,
@@ -47,18 +47,30 @@ def predict(req: ASRQuestionRequestDto) -> ASRQuestionResponseDto:
                     item.evidence_segment_ids,
                 )
 
-                # Safety fallback: if Qwen returns missing/inconsistent word IDs,
-                # preserve the known-good quote/segment evidence behavior.
-                if start is None:
+                if start is not None:
+                    strategy = 'word_ids'
+                else:
                     start, end = locate_evidence(
                         segments,
                         item.evidence_quote,
                         item.evidence_segment_ids,
                     )
+                    strategy = 'quote_or_segment_fallback' if start is not None else 'no_span'
 
             answers.append(answer)
             starts.append(start)
             ends.append(end)
+            evidence_strategies.append(strategy)
+
+        # Best-effort only: diagnostics can never break a valid prediction.
+        write_conversation_diagnostics(
+            req,
+            segments,
+            batch,
+            starts,
+            ends,
+            evidence_strategies,
+        )
 
         return ASRQuestionResponseDto(
             answers=answers,
