@@ -113,6 +113,18 @@ tIoU when answered yes          ≈ 0.593
 
 After evidence quality is understood, restore the evaluator's official 60-second timeout and measure competition-valid latency.
 
+## Evidence diagnostics branch
+
+For the next tIoU optimization step, use the dedicated diagnostics branch:
+
+`experiment/evidence-diagnostics`
+
+It keeps the word-boundary prediction behavior but can optionally persist
+per-conversation Qwen/Whisper evidence internals and run oracle/failure analysis.
+
+See [diagnostics/README.md](diagnostics/README.md) for the exact Vast + evaluator
+workflow.
+
 ## Best-known result: 0.741486 hidden validation
 
 The strongest online validation result observed so far is:
