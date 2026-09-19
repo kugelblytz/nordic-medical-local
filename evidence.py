@@ -2,11 +2,14 @@ import re
 from difflib import SequenceMatcher
 
 from config import (
+    EVIDENCE_MAX_WORD_SPAN,
     EVIDENCE_MODE,
     EVIDENCE_PAD_SECONDS,
     EVIDENCE_QUOTE_PAD_SECONDS,
+    EVIDENCE_WORD_PAD_SECONDS,
 )
 from models import TranscriptSegment
+from word_index import build_word_index
 
 
 def _norm_token(s: str) -> str:
@@ -96,6 +99,65 @@ def _segments_by_id(
     return selected
 
 
+def locate_word_evidence(
+    segments: list[TranscriptSegment],
+    start_word_id: int | None,
+    end_word_id: int | None,
+    segment_ids: list[int] | None = None,
+):
+    """Resolve explicit global Whisper word IDs to a timestamp span.
+
+    Returns (None, None) whenever the proposed range is invalid so callers
+    can safely use the legacy segment/quote resolver as a fallback.
+    """
+    if start_word_id is None or end_word_id is None:
+        return None, None
+
+    if start_word_id < 0 or end_word_id < start_word_id:
+        return None, None
+
+    span_word_count = end_word_id - start_word_id + 1
+    if span_word_count > EVIDENCE_MAX_WORD_SPAN:
+        return None, None
+
+    words = build_word_index(segments)
+    if end_word_id >= len(words):
+        return None, None
+
+    selected_words = words[start_word_id:end_word_id + 1]
+    if not selected_words:
+        return None, None
+
+    # One contiguous passage may cross one Whisper segment boundary, but it
+    # should not jump across several unrelated utterances.
+    span_segment_ids = []
+    for word in selected_words:
+        if not span_segment_ids or span_segment_ids[-1] != word.segment_id:
+            span_segment_ids.append(word.segment_id)
+
+    if len(span_segment_ids) > 2:
+        return None, None
+
+    if (
+        len(span_segment_ids) == 2
+        and abs(span_segment_ids[1] - span_segment_ids[0]) > 1
+    ):
+        return None, None
+
+    # When Qwen supplies segment IDs too, require the direct word range to live
+    # inside them. If segment IDs are missing, a valid contiguous word range is
+    # still safe enough to use.
+    if segment_ids:
+        allowed = set(segment_ids)
+        if any(segment_id not in allowed for segment_id in span_segment_ids):
+            return None, None
+
+    return (
+        max(0.0, selected_words[0].start - EVIDENCE_WORD_PAD_SECONDS),
+        selected_words[-1].end + EVIDENCE_WORD_PAD_SECONDS,
+    )
+
+
 def _segment_span(
     segments: list[TranscriptSegment],
     segment_ids: list[int],
@@ -115,9 +177,6 @@ def _tight_quote_span(
     quote: str,
     segment_ids: list[int],
 ):
-    # The LLM has already told us which utterance(s) support the answer.
-    # Restrict matching to those utterances so a repeated phrase elsewhere in
-    # the consultation cannot steal the evidence timestamp.
     selected = _segments_by_id(segments, segment_ids)
     if not selected or not quote.strip():
         return None, None
@@ -142,21 +201,16 @@ def locate_evidence(
     segment_ids: list[int] | None = None,
     mode: str = EVIDENCE_MODE,
 ):
-    # Preferred path: Qwen selects the supporting S# utterance and gives an
-    # exact quote. Use Whisper word timestamps inside that utterance for a tight
-    # span. This directly improves temporal IoU without changing classification.
+    """Legacy quote/segment resolver retained as the word-ID fallback."""
     if segment_ids:
         start, end = _tight_quote_span(segments, quote, segment_ids)
         if start is not None:
             return start, end
 
-        # Fail safe: a valid segment selection is still useful even if the quote
-        # cannot be aligned exactly.
         start, end = _segment_span(segments, segment_ids)
         if start is not None:
             return start, end
 
-    # Legacy fallback for answers without usable segment IDs.
     match = _find_quote_window(segments, quote)
     if match is None:
         return None, None
