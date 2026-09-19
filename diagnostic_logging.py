@@ -24,6 +24,11 @@ def write_conversation_diagnostics(
     starts: list[float | None],
     ends: list[float | None],
     evidence_strategies: list[str],
+    *,
+    first_pass_starts: list[float | None] | None = None,
+    first_pass_ends: list[float | None] | None = None,
+    first_pass_strategies: list[str] | None = None,
+    refinement_records: dict[int, dict] | None = None,
 ) -> None:
     """Persist one atomic JSON record per conversation.
 
@@ -64,6 +69,11 @@ def write_conversation_diagnostics(
                 }
             )
 
+        refinement_records = refinement_records or {}
+        first_pass_starts = first_pass_starts or starts
+        first_pass_ends = first_pass_ends or ends
+        first_pass_strategies = first_pass_strategies or evidence_strategies
+
         questions_payload = []
         for idx, (question, item, start, end, strategy) in enumerate(
             zip(
@@ -85,6 +95,7 @@ def write_conversation_diagnostics(
                     item.evidence_end_word_id,
                 )
 
+            refinement = refinement_records.get(idx)
             questions_payload.append(
                 {
                     'question_index': idx,
@@ -96,6 +107,20 @@ def write_conversation_diagnostics(
                     'evidence_end_word_id': item.evidence_end_word_id,
                     'evidence_quote': item.evidence_quote,
                     'selected_word_text': selected_text,
+                    'first_pass_resolved_evidence_start': first_pass_starts[idx],
+                    'first_pass_resolved_evidence_end': first_pass_ends[idx],
+                    'first_pass_evidence_strategy': first_pass_strategies[idx],
+                    'refinement': refinement,
+                    'refinement_changed_range': bool(
+                        refinement
+                        and refinement.get('used')
+                        and (
+                            refinement.get('start_word_id')
+                            != item.evidence_start_word_id
+                            or refinement.get('end_word_id')
+                            != item.evidence_end_word_id
+                        )
+                    ),
                     'resolved_evidence_start': start,
                     'resolved_evidence_end': end,
                     'evidence_strategy': strategy,
@@ -103,7 +128,7 @@ def write_conversation_diagnostics(
             )
 
         payload = {
-            'schema_version': 1,
+            'schema_version': 2,
             'created_at_utc': datetime.now(timezone.utc).isoformat(),
             'audio_filename': req.audio_filename,
             'questions': questions_payload,
