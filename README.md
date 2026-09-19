@@ -8,6 +8,16 @@ A local inference implementation for the **Medical Appointment** use case.
 
 No cloud API is used during `/predict` on the competition configuration.
 
+## Active experiment on this branch: word-boundary evidence
+
+This branch is reserved for testing **explicit Whisper word-boundary selection by Qwen3.5 27B** while keeping the current classifier unchanged.
+
+Detailed experiment design, controls, diagnostics, success criteria, and implementation checklist:
+
+- [Word-boundary evidence experiment plan](docs/word-boundary-evidence-plan.md)
+
+The objective is to improve temporal IoU without disturbing the best-known classification behavior or the `main` branch baseline.
+
 ## Best-known result: 0.741486 hidden validation
 
 The strongest online validation result observed so far is:
