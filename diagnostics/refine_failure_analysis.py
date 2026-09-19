@@ -10,13 +10,22 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from analyze_evidence import (
-    _transcript_id,
-    load_diagnostics,
-    load_gold_rows,
-    match_gold_questions,
-    tiou,
-)
+try:
+    from .analyze_evidence import (
+        _transcript_id,
+        load_diagnostics,
+        load_gold_rows,
+        match_gold_questions,
+        tiou,
+    )
+except ImportError:
+    from analyze_evidence import (
+        _transcript_id,
+        load_diagnostics,
+        load_gold_rows,
+        match_gold_questions,
+        tiou,
+    )
 
 
 def restricted_word_oracle(
