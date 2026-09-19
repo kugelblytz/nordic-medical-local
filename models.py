@@ -41,6 +41,8 @@ class LLMAnswer(BaseModel):
     reason_code: str = 'not_explicit'
     evidence_segment_ids: List[int] = Field(default_factory=list)
     evidence_quote: str = ''
+    evidence_start_word_id: Optional[int] = None
+    evidence_end_word_id: Optional[int] = None
 
 
 class LLMAnswerBatch(BaseModel):
