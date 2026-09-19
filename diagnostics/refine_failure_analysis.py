@@ -133,8 +133,14 @@ def main() -> None:
             if gold_start is None or gold_end is None:
                 continue
 
-            pred_start = prediction.get('resolved_evidence_start')
-            pred_end = prediction.get('resolved_evidence_end')
+            pred_start = prediction.get(
+                'first_pass_resolved_evidence_start',
+                prediction.get('resolved_evidence_start'),
+            )
+            pred_end = prediction.get(
+                'first_pass_resolved_evidence_end',
+                prediction.get('resolved_evidence_end'),
+            )
             current = tiou(
                 pred_start,
                 pred_end,
