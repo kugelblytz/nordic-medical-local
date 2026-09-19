@@ -4,6 +4,8 @@ import time
 import httpx
 
 from config import (
+    EVIDENCE_REFINEMENT_NUM_PREDICT,
+    EVIDENCE_REFINEMENT_TIMEOUT,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
     OLLAMA_NUM_CTX,
@@ -11,8 +13,12 @@ from config import (
     OLLAMA_URL,
     OLLAMA_WARMUP_TIMEOUT,
 )
-from models import LLMAnswer, LLMAnswerBatch, TranscriptSegment
-from word_index import build_word_index, render_transcript_with_word_ids
+from models import LLMAnswer, LLMAnswerBatch, RefinedEvidence, TranscriptSegment
+from word_index import (
+    build_word_index,
+    render_transcript_with_word_ids,
+    selected_word_text,
+)
 
 
 REASON_CODES = [
@@ -300,4 +306,196 @@ def answer_questions(
 
     raise RuntimeError(
         f'LLM structured output failed twice: {last_error}'
+    ) from last_error
+
+
+EVIDENCE_REFINEMENT_PROMPT = '''You localize evidence in a doctor-patient dialogue.
+
+Every listed proposition has ALREADY been classified TRUE by a separate
+classifier. Do not reconsider, verify, or change that decision. Your only task
+is to select the passage a human evidence annotator is most likely to mark.
+
+Search the ENTIRE transcript for all plausible supporting occurrences before
+choosing a range. The current evidence proposal is only a hint: keep it when it
+is already the best evidence, but replace it when another occurrence matches
+the question more directly.
+
+Choose evidence according to the speech act implied by the question:
+- patient symptom, experience, preference, request, or history: prefer the
+  direct patient statement;
+- examination finding: prefer the clinician's examination finding;
+- diagnosis or clinical assessment: prefer the clinician's explicit assessment
+  over an earlier patient suspicion;
+- laboratory or test result: prefer the explicit result/value statement;
+- prescribed, issued, given, or performed action: prefer the passage where the
+  action is actually committed or completed, not merely requested/discussed;
+- future plan or continuation: prefer the final confirmed plan.
+
+If several passages support the proposition, choose the one that establishes
+the proposition most explicitly and completely in the sense asked.
+
+Return one contiguous global Whisper word-ID range. Select a coherent,
+annotation-like clause or utterance: not an isolated keyword/value when nearby
+words are required for meaning, and not unrelated surrounding dialogue.
+
+A range may cross at most one adjacent Whisper segment boundary.
+
+Return only the requested JSON object.'''
+
+
+def _refinement_schema(question_indexes: list[int]) -> dict:
+    item_schema = {
+        'type': 'object',
+        'properties': {
+            'start_word_id': _nullable_word_id_schema(),
+            'end_word_id': _nullable_word_id_schema(),
+        },
+        'required': ['start_word_id', 'end_word_id'],
+        'additionalProperties': False,
+    }
+    properties = {str(index): item_schema for index in question_indexes}
+    return {
+        'type': 'object',
+        'properties': properties,
+        'required': list(properties.keys()),
+        'additionalProperties': False,
+    }
+
+
+def _run_evidence_refinement(
+    segments: list[TranscriptSegment],
+    questions: list[str],
+    first_pass: LLMAnswerBatch,
+) -> dict[int, RefinedEvidence]:
+    true_indexes = [
+        index
+        for index, answer in enumerate(first_pass.answers)
+        if answer.answer
+    ]
+    if not true_indexes:
+        return {}
+
+    transcript = _render_transcript(segments)
+    blocks: list[str] = []
+    for index in true_indexes:
+        answer = first_pass.answers[index]
+        current_text = ''
+        if (
+            answer.evidence_start_word_id is not None
+            and answer.evidence_end_word_id is not None
+        ):
+            current_text = selected_word_text(
+                segments,
+                answer.evidence_start_word_id,
+                answer.evidence_end_word_id,
+            )
+
+        blocks.append(
+            '\n'.join(
+                [
+                    f'QUESTION {index}',
+                    f'Proposition: {questions[index]}',
+                    (
+                        'Current word range: '
+                        f'{answer.evidence_start_word_id}-'
+                        f'{answer.evidence_end_word_id}'
+                    ),
+                    f'Current selected text: {current_text or "(unavailable)"}',
+                ]
+            )
+        )
+
+    user_prompt = (
+        'TRANSCRIPT:\n'
+        f'{transcript}\n\n'
+        'TRUE PROPOSITIONS TO LOCALIZE:\n'
+        + '\n\n'.join(blocks)
+        + '\n\nReturn exactly these original question-index keys: '
+        + ', '.join(str(index) for index in true_indexes)
+        + '.'
+    )
+
+    payload = {
+        'model': OLLAMA_MODEL,
+        'stream': False,
+        'think': False,
+        'keep_alive': OLLAMA_KEEP_ALIVE,
+        'format': _refinement_schema(true_indexes),
+        'options': {
+            'temperature': 0,
+            'num_predict': EVIDENCE_REFINEMENT_NUM_PREDICT,
+            'num_ctx': OLLAMA_NUM_CTX,
+        },
+        'messages': [
+            {'role': 'system', 'content': EVIDENCE_REFINEMENT_PROMPT},
+            {'role': 'user', 'content': user_prompt},
+        ],
+    }
+
+    with _client(EVIDENCE_REFINEMENT_TIMEOUT) as client:
+        response = client.post(f'{OLLAMA_URL}/api/chat', json=payload)
+        response.raise_for_status()
+        content = response.json()['message']['content']
+
+    raw = json.loads(content)
+    expected_keys = {str(index) for index in true_indexes}
+    if set(raw.keys()) != expected_keys:
+        raise ValueError(
+            'Evidence refiner returned keys '
+            f'{sorted(raw.keys())}; expected {sorted(expected_keys)}'
+        )
+
+    word_count = len(build_word_index(segments))
+    result: dict[int, RefinedEvidence] = {}
+    for index in true_indexes:
+        item = RefinedEvidence.model_validate(raw[str(index)])
+        start_id = item.start_word_id
+        end_id = item.end_word_id
+        if (
+            start_id is None
+            or end_id is None
+            or start_id < 0
+            or end_id < start_id
+            or end_id >= word_count
+        ):
+            item = RefinedEvidence()
+        result[index] = item
+
+    return result
+
+
+def refine_evidence(
+    segments: list[TranscriptSegment],
+    questions: list[str],
+    first_pass: LLMAnswerBatch,
+) -> dict[int, RefinedEvidence]:
+    """Run one evidence-only batch over TRUE answers.
+
+    This function has no ability to alter classification. If the structured
+    refinement request fails twice, callers may safely keep first-pass evidence.
+    """
+    if not any(answer.answer for answer in first_pass.answers):
+        return {}
+
+    last_error = None
+    for attempt in range(2):
+        try:
+            return _run_evidence_refinement(
+                segments,
+                questions,
+                first_pass,
+            )
+        except (
+            ValueError,
+            json.JSONDecodeError,
+            KeyError,
+            httpx.TimeoutException,
+            httpx.HTTPError,
+        ) as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(0.1)
+
+    raise RuntimeError(
+        f'Evidence refinement failed twice: {last_error}'
     ) from last_error
