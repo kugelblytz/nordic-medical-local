@@ -34,7 +34,11 @@ def root():
 
 @app.get('/api')
 def api_status():
-    return {'service': 'medical-appointment-usecase', 'status': 'ok'}
+    return {
+        'service': 'medical-appointment-usecase',
+        'status': 'ok',
+        'evidence_strategy': 'qwen-word-boundary-v1',
+    }
 
 
 @app.post('/predict', response_model=ASRQuestionResponseDto)
