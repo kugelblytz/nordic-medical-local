@@ -29,6 +29,16 @@ Detailed design and evaluation instructions:
 
 - [Evidence refinement v2](docs/evidence-refinement-v2.md)
 
+Performance diagnostics are built into the V2 diagnostic run. After evaluation:
+
+```bash
+python diagnostics/analyze_timing.py \
+  --diagnostics-dir .diagnostics/evidence-refinement-v2
+```
+
+This reports request/ASR/Pass-1/Pass-2 timing, Ollama prompt and generation
+throughput, retries, correlations, and the slowest conversations.
+
 ## Baseline experiment: word-boundary evidence
 
 This branch now implements **explicit Whisper word-boundary selection by Qwen3.5 27B** while preserving the existing classifier and quote/segment fallback.
