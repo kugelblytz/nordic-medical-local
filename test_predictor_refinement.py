@@ -67,16 +67,16 @@ def request():
 
 def test_refinement_changes_only_evidence(monkeypatch):
     monkeypatch.setattr(predictor, 'EVIDENCE_REFINEMENT_ENABLED', True)
-    monkeypatch.setattr(predictor, 'transcribe', lambda _: sample_segments())
+    monkeypatch.setattr(predictor, 'transcribe', lambda _, timing=None: sample_segments())
     monkeypatch.setattr(
         predictor,
         'answer_questions',
-        lambda segments, questions: sample_batch(),
+        lambda segments, questions, timing=None: sample_batch(),
     )
     monkeypatch.setattr(
         predictor,
         'refine_evidence',
-        lambda segments, questions, batch: {
+        lambda segments, questions, batch, timing=None: {
             0: RefinedEvidence(start_word_id=1, end_word_id=2),
             2: RefinedEvidence(start_word_id=4, end_word_id=5),
         },
@@ -96,16 +96,16 @@ def test_refinement_changes_only_evidence(monkeypatch):
 
 def test_invalid_refinement_preserves_first_pass(monkeypatch):
     monkeypatch.setattr(predictor, 'EVIDENCE_REFINEMENT_ENABLED', True)
-    monkeypatch.setattr(predictor, 'transcribe', lambda _: sample_segments())
+    monkeypatch.setattr(predictor, 'transcribe', lambda _, timing=None: sample_segments())
     monkeypatch.setattr(
         predictor,
         'answer_questions',
-        lambda segments, questions: sample_batch(),
+        lambda segments, questions, timing=None: sample_batch(),
     )
     monkeypatch.setattr(
         predictor,
         'refine_evidence',
-        lambda segments, questions, batch: {
+        lambda segments, questions, batch, timing=None: {
             0: RefinedEvidence(start_word_id=1, end_word_id=999),
             2: RefinedEvidence(start_word_id=4, end_word_id=5),
         },
@@ -127,11 +127,11 @@ def test_invalid_refinement_preserves_first_pass(monkeypatch):
 
 def test_refiner_exception_preserves_classification_and_first_pass(monkeypatch):
     monkeypatch.setattr(predictor, 'EVIDENCE_REFINEMENT_ENABLED', True)
-    monkeypatch.setattr(predictor, 'transcribe', lambda _: sample_segments())
+    monkeypatch.setattr(predictor, 'transcribe', lambda _, timing=None: sample_segments())
     monkeypatch.setattr(
         predictor,
         'answer_questions',
-        lambda segments, questions: sample_batch(),
+        lambda segments, questions, timing=None: sample_batch(),
     )
 
     def fail(*args, **kwargs):
