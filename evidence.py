@@ -144,14 +144,11 @@ def locate_word_evidence(
     ):
         return None, None
 
-    # When Qwen supplies segment IDs too, require the direct word range to live
-    # inside them. If segment IDs are missing, a valid contiguous word range is
-    # still safe enough to use.
-    if segment_ids:
-        allowed = set(segment_ids)
-        if any(segment_id not in allowed for segment_id in span_segment_ids):
-            return None, None
-
+    # The explicit word IDs are the authoritative direct-evidence address.
+    # evidence_segment_ids is retained for diagnostics and legacy fallback, but
+    # it must not invalidate an otherwise valid contiguous word range. In the
+    # diagnostic run, redundant segment-ID mismatches caused good word spans to
+    # fall back unnecessarily.
     return (
         max(0.0, selected_words[0].start - EVIDENCE_WORD_PAD_SECONDS),
         selected_words[-1].end + EVIDENCE_WORD_PAD_SECONDS,
