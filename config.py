@@ -26,6 +26,9 @@ EVIDENCE_QUOTE_PAD_SECONDS = float(os.getenv('EVIDENCE_QUOTE_PAD_SECONDS', '0.12
 EVIDENCE_WORD_PAD_SECONDS = float(os.getenv('EVIDENCE_WORD_PAD_SECONDS', '0.00'))
 EVIDENCE_MAX_WORD_SPAN = int(os.getenv('EVIDENCE_MAX_WORD_SPAN', '80'))
 
+DIAGNOSTICS_ENABLED = _env_bool('DIAGNOSTICS_ENABLED', False)
+DIAGNOSTICS_DIR = os.getenv('DIAGNOSTICS_DIR', '.diagnostics/word-boundary-v1')
+
 WARMUP_ON_START = _env_bool('WARMUP_ON_START', True)
 
 HOST = os.getenv('HOST', '0.0.0.0')
