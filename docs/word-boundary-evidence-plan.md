@@ -619,19 +619,19 @@ before accounting for classification or timeout changes.
 
 ## Implementation checklist
 
-- [ ] Add stable global word IDs.
-- [ ] Add word-ID transcript renderer.
-- [ ] Add `evidence_start_word_id` to the structured schema/model.
-- [ ] Add `evidence_end_word_id` to the structured schema/model.
-- [ ] Preserve current reason-code classification.
-- [ ] Update prompt with complete-span word-boundary instructions.
-- [ ] Add word-ID validation.
-- [ ] Add direct word-ID → timestamp conversion.
-- [ ] Keep current quote matcher as fallback.
-- [ ] Add tests for valid word ranges.
-- [ ] Add tests for invalid/reversed/missing IDs.
-- [ ] Add tests for ranges crossing adjacent segments.
-- [ ] Add tests proving fallback behavior remains intact.
+- [x] Add stable global word IDs.
+- [x] Add word-ID transcript renderer.
+- [x] Add `evidence_start_word_id` to the structured schema/model.
+- [x] Add `evidence_end_word_id` to the structured schema/model.
+- [x] Preserve current reason-code classification.
+- [x] Update prompt with complete-span word-boundary instructions.
+- [x] Add word-ID validation.
+- [x] Add direct word-ID → timestamp conversion.
+- [x] Keep current quote matcher as fallback.
+- [x] Add tests for valid word ranges.
+- [x] Add tests for invalid/reversed/missing IDs.
+- [x] Add tests for ranges crossing adjacent segments.
+- [x] Add tests proving fallback behavior remains intact.
 - [ ] Add evidence diagnostic logging/report generation.
 - [ ] Run 39-conversation diagnostic with long timeout.
 - [ ] Compare classification against baseline.
@@ -678,3 +678,7 @@ Do not change these at the same time:
 The first experiment should answer exactly one question:
 
 > Does having Qwen select explicit Whisper word boundaries improve evidence tIoU without materially hurting classification?
+
+## Implementation status
+
+Core pipeline implementation completed on this branch. Local unit validation of the word-index and evidence resolver passed **12/12 tests**. The remaining steps require a real Qwen3.5 27B/Vast run and the official local evaluator.
