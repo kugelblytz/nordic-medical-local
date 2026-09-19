@@ -26,13 +26,24 @@ from typing import Any
 
 import httpx
 
-from experiments.evidence_provenance_selector import (
-    classify_baseline_bucket,
-    load_candidate_rows,
-    load_diagnostics,
-    local_context,
-    prepare_candidates,
-)
+# Support both package imports (pytest / python -m) and direct execution
+# (python experiments/evidence_candidate_features.py).
+if __package__:
+    from experiments.evidence_provenance_selector import (
+        classify_baseline_bucket,
+        load_candidate_rows,
+        load_diagnostics,
+        local_context,
+        prepare_candidates,
+    )
+else:
+    from evidence_provenance_selector import (
+        classify_baseline_bucket,
+        load_candidate_rows,
+        load_diagnostics,
+        local_context,
+        prepare_candidates,
+    )
 
 
 PROMPT_VERSION = "candidate-features-v1"
