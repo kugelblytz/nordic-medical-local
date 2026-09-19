@@ -65,6 +65,12 @@ def test_run_refinement_uses_original_question_indexes(monkeypatch):
 
         def json(self):
             return {
+                'total_duration': 2_000_000_000,
+                'load_duration': 0,
+                'prompt_eval_count': 1000,
+                'prompt_eval_duration': 500_000_000,
+                'eval_count': 100,
+                'eval_duration': 1_000_000_000,
                 'message': {
                     'content': json.dumps(
                         {
@@ -94,10 +100,12 @@ def test_run_refinement_uses_original_question_indexes(monkeypatch):
 
     monkeypatch.setattr(llm, '_client', lambda *args, **kwargs: FakeClient())
 
+    attempt_timing = {}
     result = llm._run_evidence_refinement(
         segments(),
         ['q0', 'q1', 'q2'],
         batch,
+        attempt_timing=attempt_timing,
     )
 
     assert set(result.keys()) == {1, 2}
@@ -105,3 +113,6 @@ def test_run_refinement_uses_original_question_indexes(monkeypatch):
     assert result[1].end_word_id == 2
     assert result[2].start_word_id == 2
     assert result[2].end_word_id == 2
+    assert attempt_timing['ollama']['total_ms'] == 2000.0
+    assert attempt_timing['ollama']['prompt_tokens_per_s'] == 2000.0
+    assert attempt_timing['ollama']['output_tokens_per_s'] == 100.0
