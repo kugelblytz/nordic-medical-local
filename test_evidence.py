@@ -105,13 +105,13 @@ def test_word_ids_reject_out_of_range_id():
     ) == (None, None)
 
 
-def test_word_ids_reject_segment_mismatch():
+def test_word_ids_ignore_redundant_segment_mismatch():
     assert locate_word_evidence(
         [sample_segment()],
         1,
         4,
         segment_ids=[8],
-    ) == (None, None)
+    ) == (10.5, 12.4)
 
 
 def test_word_range_can_cross_one_adjacent_segment_boundary():
@@ -126,7 +126,7 @@ def test_word_range_can_cross_one_adjacent_segment_boundary():
     ) == (12.0, 15.8)
 
 
-def test_cross_segment_range_requires_both_selected_segments():
+def test_cross_segment_word_range_is_authoritative():
     segments = [sample_segment(), adjacent_segment()]
 
     assert locate_word_evidence(
@@ -134,4 +134,26 @@ def test_cross_segment_range_requires_both_selected_segments():
         4,
         6,
         segment_ids=[7],
+    ) == (12.0, 15.8)
+
+
+def test_word_range_rejects_three_segments():
+    third = TranscriptSegment(
+        id=9,
+        start=18.0,
+        end=20.0,
+        text='Then stop.',
+        words=[
+            WordToken(text='Then', start=18.1, end=18.4),
+            WordToken(text='stop.', start=18.5, end=18.9),
+        ],
+    )
+    segments = [sample_segment(), adjacent_segment(), third]
+
+    # W4 in S7 through W10 in S9 crosses three Whisper segments.
+    assert locate_word_evidence(
+        segments,
+        4,
+        10,
+        segment_ids=[7, 8],
     ) == (None, None)
