@@ -8,7 +8,28 @@ A local inference implementation for the **Medical Appointment** use case.
 
 No cloud API is used during `/predict` on the competition configuration.
 
-## Active experiment on this branch: word-boundary evidence
+## Active experiment on this branch: evidence refinement v2
+
+This branch freezes the existing Qwen3.5 27B TRUE/FALSE classifier and adds one
+batched **evidence-only** second pass for questions already classified TRUE.
+The second pass receives the full word-numbered transcript plus the original
+evidence proposal and can only return refined start/end word IDs.
+
+It cannot change classification. Invalid/missing refinements preserve the
+first-pass evidence, and the existing quote/segment resolver remains the final
+fallback.
+
+Run:
+
+```bash
+bash run_evidence_refinement_diagnostics.sh
+```
+
+Detailed design and evaluation instructions:
+
+- [Evidence refinement v2](docs/evidence-refinement-v2.md)
+
+## Baseline experiment: word-boundary evidence
 
 This branch now implements **explicit Whisper word-boundary selection by Qwen3.5 27B** while preserving the existing classifier and quote/segment fallback.
 
