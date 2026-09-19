@@ -10,13 +10,108 @@ No cloud API is used during `/predict` on the competition configuration.
 
 ## Active experiment on this branch: word-boundary evidence
 
-This branch is reserved for testing **explicit Whisper word-boundary selection by Qwen3.5 27B** while keeping the current classifier unchanged.
+This branch now implements **explicit Whisper word-boundary selection by Qwen3.5 27B** while preserving the existing classifier and quote/segment fallback.
 
-Detailed experiment design, controls, diagnostics, success criteria, and implementation checklist:
+Pipeline:
+
+```text
+MP3
+  ↓
+faster-whisper large-v3-turbo
+  ↓
+Whisper segments + word timestamps
+  ↓
+assign stable global W0, W1, W2... word IDs
+  ↓
+Qwen3.5 27B receives one word-addressed transcript
+  ↓
+same strict TRUE/FALSE reason-code classification
+  ↓
+TRUE answers return segment IDs + start/end word IDs + quote
+  ↓
+validate the proposed contiguous word range
+  ↓
+direct first-word.start / last-word.end timestamps
+  ↓
+if invalid: fall back to the known-good quote/segment resolver
+```
+
+The first A/B intentionally uses **0.00 seconds of word-boundary padding** so the effect of explicit word selection can be measured cleanly.
+
+Detailed design and follow-up optimization plan:
 
 - [Word-boundary evidence experiment plan](docs/word-boundary-evidence-plan.md)
 
-The objective is to improve temporal IoU without disturbing the best-known classification behavior or the `main` branch baseline.
+### Run this experiment on Vast
+
+If the repository is already deployed:
+
+```bash
+cd /workspace/nordic-medical-local
+git fetch origin
+git switch experiment/word-boundary-evidence
+git pull
+
+pkill -f "python3 api.py" || true
+bash run_word_boundary_experiment.sh
+```
+
+The launcher pins the research configuration to:
+
+```text
+OLLAMA_MODEL=qwen3.5:27b
+OLLAMA_NUM_CTX=8192
+OLLAMA_TIMEOUT=90
+ASR_MODEL=large-v3-turbo
+EVIDENCE_WORD_PAD_SECONDS=0.00
+EVIDENCE_MAX_WORD_SPAN=80
+```
+
+The already-downloaded Ollama model store under `.vast/ollama` is reused.
+
+Verify the running branch:
+
+```bash
+curl http://127.0.0.1:9054/api
+```
+
+Expected response includes:
+
+```json
+"evidence_strategy": "qwen-word-boundary-v1"
+```
+
+### Evaluate
+
+Use the same official local evaluator as before. For the first research run, temporarily change its request timeout from 60 to 120 seconds so Vast latency does not contaminate the evidence comparison.
+
+Then run from Windows:
+
+```cmd
+cd C:\Users\joris\Nordic-AI-Cup-2026\medical-appointment
+.venv\Scripts\activate
+python local_evaluator.py --url http://151.237.25.16:26401/predict --verbose
+```
+
+Compare primarily:
+
+```text
+Accuracy
+positive / hard_negative / off_topic accuracy
+Mean tIoU
+tIoU when answered yes
+no span returned
+timeouts
+```
+
+Reference from the recent Qwen diagnostic:
+
+```text
+completed-request classification ≈ 98.8%
+tIoU when answered yes          ≈ 0.593
+```
+
+After evidence quality is understood, restore the evaluator's official 60-second timeout and measure competition-valid latency.
 
 ## Best-known result: 0.741486 hidden validation
 
