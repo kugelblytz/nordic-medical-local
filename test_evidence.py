@@ -1,4 +1,4 @@
-from evidence import locate_evidence, locate_quote
+from evidence import locate_evidence, locate_quote, locate_word_evidence
 from models import TranscriptSegment, WordToken
 
 
@@ -14,6 +14,22 @@ def sample_segment():
             WordToken(text='milligrams', start=10.9, end=11.5),
             WordToken(text='once', start=11.6, end=11.9),
             WordToken(text='daily.', start=12.0, end=12.4),
+        ],
+    )
+
+
+def adjacent_segment():
+    return TranscriptSegment(
+        id=8,
+        start=15.0,
+        end=18.0,
+        text='Continue this for one week.',
+        words=[
+            WordToken(text='Continue', start=15.1, end=15.5),
+            WordToken(text='this', start=15.6, end=15.8),
+            WordToken(text='for', start=15.9, end=16.1),
+            WordToken(text='one', start=16.2, end=16.4),
+            WordToken(text='week.', start=16.5, end=16.9),
         ],
     )
 
@@ -59,3 +75,63 @@ def test_no_segment_id_retains_legacy_segment_mode():
         '100 milligrams once daily',
         mode='segment',
     ) == (9.8, 15.2)
+
+
+def test_word_ids_map_directly_to_whisper_timestamps():
+    # Global W1..W4 are 100 through daily.
+    assert locate_word_evidence(
+        [sample_segment()],
+        1,
+        4,
+        segment_ids=[7],
+    ) == (10.5, 12.4)
+
+
+def test_word_ids_reject_reversed_range():
+    assert locate_word_evidence(
+        [sample_segment()],
+        4,
+        1,
+        segment_ids=[7],
+    ) == (None, None)
+
+
+def test_word_ids_reject_out_of_range_id():
+    assert locate_word_evidence(
+        [sample_segment()],
+        1,
+        99,
+        segment_ids=[7],
+    ) == (None, None)
+
+
+def test_word_ids_reject_segment_mismatch():
+    assert locate_word_evidence(
+        [sample_segment()],
+        1,
+        4,
+        segment_ids=[8],
+    ) == (None, None)
+
+
+def test_word_range_can_cross_one_adjacent_segment_boundary():
+    segments = [sample_segment(), adjacent_segment()]
+
+    # W4 is "daily." in S7 and W5.. are in S8.
+    assert locate_word_evidence(
+        segments,
+        4,
+        6,
+        segment_ids=[7, 8],
+    ) == (12.0, 15.8)
+
+
+def test_cross_segment_range_requires_both_selected_segments():
+    segments = [sample_segment(), adjacent_segment()]
+
+    assert locate_word_evidence(
+        segments,
+        4,
+        6,
+        segment_ids=[7],
+    ) == (None, None)
