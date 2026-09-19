@@ -4,7 +4,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from asr import warmup as warmup_asr
-from config import HOST, PORT, WARMUP_ON_START
+from config import EVIDENCE_REFINEMENT_ENABLED, HOST, PORT, WARMUP_ON_START
 from llm import warmup as warmup_llm
 from models import ASRQuestionRequestDto, ASRQuestionResponseDto
 from predictor import predict
@@ -37,7 +37,11 @@ def api_status():
     return {
         'service': 'medical-appointment-usecase',
         'status': 'ok',
-        'evidence_strategy': 'qwen-word-boundary-v1',
+        'evidence_strategy': (
+            'qwen-evidence-refinement-v2'
+            if EVIDENCE_REFINEMENT_ENABLED
+            else 'qwen-word-boundary-v1'
+        ),
     }
 
 
