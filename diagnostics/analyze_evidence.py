@@ -301,7 +301,7 @@ def load_diagnostics(path: Path) -> list[dict[str, Any]]:
     payloads = []
     for file_path in files:
         payload = json.loads(file_path.read_text(encoding='utf-8'))
-        if payload.get('schema_version') not in {1, 2}:
+        if payload.get('schema_version') not in {1, 2, 3}:
             raise ValueError(
                 f'Unsupported diagnostics schema in {file_path}: '
                 f"{payload.get('schema_version')}"
