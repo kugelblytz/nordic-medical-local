@@ -12,6 +12,7 @@ from config import (
     OLLAMA_WARMUP_TIMEOUT,
 )
 from models import LLMAnswer, LLMAnswerBatch, TranscriptSegment
+from word_index import build_word_index, render_transcript_with_word_ids
 
 
 REASON_CODES = [
@@ -68,14 +69,22 @@ For every question return one reason_code:
 
 answer must be TRUE if and only if reason_code is exact_support.
 
+The transcript contains segment labels S0, S1, ... and every timestamped Whisper word is prefixed by a global integer word ID in the form 142:word.
+
 Evidence rules for TRUE answers:
-- Transcript utterances are labelled S0, S1, ...
-- Return the smallest 1 or 2 segment IDs that directly establish the proposition.
-- Copy an exact supporting spoken quote from those segment(s).
-- Do not include timestamps or segment labels in evidence_quote.
+- Return the smallest 1 or 2 segment IDs that contain the complete supporting passage.
+- Return evidence_start_word_id and evidence_end_word_id for one CONTIGUOUS word range.
+- Select the shortest COMPLETE passage that establishes every material part of the proposition, not merely a keyword or isolated value.
+- Include all words needed to establish dose, frequency, duration, date/time, body location, symptom/test/result, treatment/action, status, or negation when those details matter.
+- A word range may cross one adjacent Whisper segment boundary when the complete evidence requires both segments.
+- The chosen word range must lie inside the returned evidence_segment_ids.
+- evidence_start_word_id must be less than or equal to evidence_end_word_id.
+- Also copy the exact spoken text of the chosen word range into evidence_quote. The quote is retained as a fallback and diagnostic.
 
 For FALSE answers:
 - evidence_segment_ids must be []
+- evidence_start_word_id must be null
+- evidence_end_word_id must be null
 - evidence_quote must be ""
 
 Return one result for EVERY numbered question. Never omit a question. Output JSON only.
@@ -92,10 +101,16 @@ def _client(timeout_seconds: float = OLLAMA_TIMEOUT) -> httpx.Client:
 
 
 def _render_transcript(segments: list[TranscriptSegment]) -> str:
-    return '\n'.join(
-        f'[S{s.id} {s.start:.2f}-{s.end:.2f}] {s.text}'
-        for s in segments
-    )
+    return render_transcript_with_word_ids(segments)
+
+
+def _nullable_word_id_schema() -> dict:
+    return {
+        'anyOf': [
+            {'type': 'integer', 'minimum': 0},
+            {'type': 'null'},
+        ]
+    }
 
 
 def _answer_schema(question_count: int) -> dict:
@@ -112,12 +127,16 @@ def _answer_schema(question_count: int) -> dict:
                 'items': {'type': 'integer', 'minimum': 0},
                 'maxItems': 2,
             },
+            'evidence_start_word_id': _nullable_word_id_schema(),
+            'evidence_end_word_id': _nullable_word_id_schema(),
             'evidence_quote': {'type': 'string'},
         },
         'required': [
             'answer',
             'reason_code',
             'evidence_segment_ids',
+            'evidence_start_word_id',
+            'evidence_end_word_id',
             'evidence_quote',
         ],
         'additionalProperties': False,
@@ -186,7 +205,11 @@ QUESTIONS:
 Return a JSON object with exactly these keys:
 {", ".join(str(i) for i in range(len(questions)))}
 
-For each question, compare EVERY material factual slot against the transcript before deciding. Choose one reason_code. answer must agree with reason_code: only exact_support is true.
+For each question:
+1. compare EVERY material factual slot against the transcript;
+2. choose exactly one reason_code;
+3. answer true only for exact_support;
+4. for true answers choose the complete contiguous evidence word range using the numbered word IDs.
 
 Do not omit any key.'''
 
@@ -198,7 +221,7 @@ Do not omit any key.'''
         'format': _answer_schema(len(questions)),
         'options': {
             'temperature': 0,
-            'num_predict': 2200,
+            'num_predict': 2400,
             'num_ctx': OLLAMA_NUM_CTX,
         },
         'messages': [
@@ -220,7 +243,8 @@ Do not omit any key.'''
         )
 
     answers = []
-    max_segment_id = len(segments) - 1
+    valid_segment_ids = {segment.id for segment in segments}
+    word_count = len(build_word_index(segments))
 
     for i in range(len(questions)):
         item = LLMAnswer.model_validate(raw[str(i)])
@@ -230,10 +254,24 @@ Do not omit any key.'''
             item.evidence_segment_ids = [
                 sid
                 for sid in item.evidence_segment_ids
-                if 0 <= sid <= max_segment_id
+                if sid in valid_segment_ids
             ][:2]
+
+            start_id = item.evidence_start_word_id
+            end_id = item.evidence_end_word_id
+            if (
+                start_id is None
+                or end_id is None
+                or start_id < 0
+                or end_id < start_id
+                or end_id >= word_count
+            ):
+                item.evidence_start_word_id = None
+                item.evidence_end_word_id = None
         else:
             item.evidence_segment_ids = []
+            item.evidence_start_word_id = None
+            item.evidence_end_word_id = None
             item.evidence_quote = ''
 
         answers.append(item)
