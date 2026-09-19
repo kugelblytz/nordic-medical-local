@@ -1,4 +1,4 @@
-# Nordic AI Cup 2026 — Medical Appointment local starter
+
 
 A local inference implementation for the **Medical Appointment** use case.
 
