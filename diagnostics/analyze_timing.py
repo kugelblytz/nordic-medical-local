@@ -66,12 +66,18 @@ def _stats(values: list[float]) -> dict[str, float | int | None]:
     }
 
 
-def _corr(xs: list[float], ys: list[float]) -> float | None:
-    pairs = [
-        (float(x), float(y))
-        for x, y in zip(xs, ys)
-        if x is not None and y is not None
-    ]
+def _corr_rows(
+    rows: list[dict[str, Any]],
+    x_key: str,
+    y_key: str,
+) -> float | None:
+    pairs = []
+    for row in rows:
+        x = _number(row.get(x_key))
+        y = _number(row.get(y_key))
+        if x is not None and y is not None:
+            pairs.append((x, y))
+
     if len(pairs) < 2:
         return None
 
@@ -237,29 +243,35 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         metrics[key] = _stats(values(key))
 
     correlations = {
-        'audio_duration_vs_asr_ms': _corr(
-            values('audio_duration_s'),
-            values('asr_total_ms'),
+        'audio_duration_vs_asr_ms': _corr_rows(
+            rows,
+            'audio_duration_s',
+            'asr_total_ms',
         ),
-        'word_count_vs_pass1_prompt_eval_ms': _corr(
-            values('word_count'),
-            values('pass1_prompt_eval_ms'),
+        'word_count_vs_pass1_prompt_eval_ms': _corr_rows(
+            rows,
+            'word_count',
+            'pass1_prompt_eval_ms',
         ),
-        'word_count_vs_pass2_prompt_eval_ms': _corr(
-            values('word_count'),
-            values('pass2_prompt_eval_ms'),
+        'word_count_vs_pass2_prompt_eval_ms': _corr_rows(
+            rows,
+            'word_count',
+            'pass2_prompt_eval_ms',
         ),
-        'true_questions_vs_pass2_eval_ms': _corr(
-            values('true_question_count'),
-            values('pass2_eval_ms'),
+        'true_questions_vs_pass2_eval_ms': _corr_rows(
+            rows,
+            'true_question_count',
+            'pass2_eval_ms',
         ),
-        'pass1_output_tokens_vs_eval_ms': _corr(
-            values('pass1_output_tokens'),
-            values('pass1_eval_ms'),
+        'pass1_output_tokens_vs_eval_ms': _corr_rows(
+            rows,
+            'pass1_output_tokens',
+            'pass1_eval_ms',
         ),
-        'pass2_output_tokens_vs_eval_ms': _corr(
-            values('pass2_output_tokens'),
-            values('pass2_eval_ms'),
+        'pass2_output_tokens_vs_eval_ms': _corr_rows(
+            rows,
+            'pass2_output_tokens',
+            'pass2_eval_ms',
         ),
     }
 
