@@ -149,6 +149,15 @@ def load_rows(directory: Path) -> list[dict[str, Any]]:
             'pass1_output_tokens_per_s': _number(
                 pass1_ollama.get('output_tokens_per_s')
             ),
+            'pass1_http_minus_ollama_ms': (
+                max(
+                    0.0,
+                    float(pass1.get('http_wall_ms')) - float(pass1_ollama.get('total_ms')),
+                )
+                if pass1.get('http_wall_ms') is not None
+                and pass1_ollama.get('total_ms') is not None
+                else None
+            ),
             'pass1_retry_count': _number(pass1.get('retry_count')) or 0.0,
             'pass2_enabled': bool(pass2.get('enabled', False)),
             'true_question_count': _number(pass2.get('true_question_count')),
@@ -167,6 +176,15 @@ def load_rows(directory: Path) -> list[dict[str, Any]]:
             ),
             'pass2_output_tokens_per_s': _number(
                 pass2_ollama.get('output_tokens_per_s')
+            ),
+            'pass2_http_minus_ollama_ms': (
+                max(
+                    0.0,
+                    float(pass2.get('http_wall_ms')) - float(pass2_ollama.get('total_ms')),
+                )
+                if pass2.get('http_wall_ms') is not None
+                and pass2_ollama.get('total_ms') is not None
+                else None
             ),
             'pass2_retry_count': _number(pass2.get('retry_count')) or 0.0,
             'evidence_resolution_ms': _number(
@@ -225,14 +243,20 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         'audio_duration_s',
         'asr_realtime_factor',
         'word_count',
+        'pass1_ollama_total_ms',
+        'pass1_load_ms',
         'pass1_prompt_eval_ms',
         'pass1_eval_ms',
+        'pass1_http_minus_ollama_ms',
         'pass1_prompt_tokens',
         'pass1_output_tokens',
         'pass1_prompt_tokens_per_s',
         'pass1_output_tokens_per_s',
+        'pass2_ollama_total_ms',
+        'pass2_load_ms',
         'pass2_prompt_eval_ms',
         'pass2_eval_ms',
+        'pass2_http_minus_ollama_ms',
         'pass2_prompt_tokens',
         'pass2_output_tokens',
         'pass2_prompt_tokens_per_s',
@@ -355,6 +379,23 @@ def print_summary(summary: dict[str, Any]) -> None:
             f"{_fmt(stats['p90']):>10s} "
             f"{_fmt(stats['max']):>10s} "
             f"{_fmt(stats['percent_of_request_mean']):>9s}"
+        )
+
+    print()
+    print('Ollama phase timing (ms)')
+    for pass_name in ('pass1', 'pass2'):
+        load_stats = summary['metrics'][f'{pass_name}_load_ms']
+        prompt_stats = summary['metrics'][f'{pass_name}_prompt_eval_ms']
+        eval_stats = summary['metrics'][f'{pass_name}_eval_ms']
+        overhead_stats = summary['metrics'][
+            f'{pass_name}_http_minus_ollama_ms'
+        ]
+        print(
+            f"  {pass_name}: load mean/p90 "
+            f"{_fmt(load_stats['mean'])}/{_fmt(load_stats['p90'])}, "
+            f"prompt {_fmt(prompt_stats['mean'])}/{_fmt(prompt_stats['p90'])}, "
+            f"generate {_fmt(eval_stats['mean'])}/{_fmt(eval_stats['p90'])}, "
+            f"HTTP-other {_fmt(overhead_stats['mean'])}/{_fmt(overhead_stats['p90'])}"
         )
 
     print()
