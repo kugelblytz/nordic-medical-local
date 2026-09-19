@@ -53,15 +53,18 @@ def test_diagnostic_logger_writes_conversation_json(tmp_path):
         [1.2],
         [1.8],
         ['word_ids'],
+        timing={'request_core_ms': 12.5},
     )
 
     path = tmp_path / 'conversation_sample_4.json'
     payload = json.loads(path.read_text(encoding='utf-8'))
 
-    assert payload['schema_version'] == 2
+    assert payload['schema_version'] == 3
     assert payload['audio_filename'] == 'conversation_sample_4.mp3'
     assert payload['words'][1]['id'] == 1
     assert payload['questions'][0]['selected_word_text'] == '100 mg.'
     assert payload['questions'][0]['evidence_strategy'] == 'word_ids'
     assert payload['questions'][0]['first_pass_resolved_evidence_start'] == 1.2
     assert payload['questions'][0]['refinement'] is None
+    assert payload['timing']['request_core_ms'] == 12.5
+    assert payload['timing']['diagnostics']['payload_build_ms'] >= 0
