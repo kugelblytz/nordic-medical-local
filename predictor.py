@@ -2,7 +2,7 @@ import base64
 import logging
 
 from asr import transcribe
-from evidence import locate_evidence
+from evidence import locate_evidence, locate_word_evidence
 from llm import answer_questions
 from models import ASRQuestionRequestDto, ASRQuestionResponseDto
 
@@ -37,11 +37,24 @@ def predict(req: ASRQuestionRequestDto) -> ASRQuestionResponseDto:
             start = end = None
 
             if answer:
-                start, end = locate_evidence(
+                # Experimental primary path: Qwen points directly at the first
+                # and last global Whisper word IDs. The resolver maps those IDs
+                # to Whisper timestamps with no fuzzy text matching.
+                start, end = locate_word_evidence(
                     segments,
-                    item.evidence_quote,
+                    item.evidence_start_word_id,
+                    item.evidence_end_word_id,
                     item.evidence_segment_ids,
                 )
+
+                # Safety fallback: if Qwen returns missing/inconsistent word IDs,
+                # preserve the known-good quote/segment evidence behavior.
+                if start is None:
+                    start, end = locate_evidence(
+                        segments,
+                        item.evidence_quote,
+                        item.evidence_segment_ids,
+                    )
 
             answers.append(answer)
             starts.append(start)
