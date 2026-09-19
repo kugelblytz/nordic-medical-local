@@ -2,9 +2,11 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from config import DIAGNOSTICS_DIR, DIAGNOSTICS_ENABLED
 from models import ASRQuestionRequestDto, LLMAnswerBatch, TranscriptSegment
+from performance_metrics import elapsed_ms, now_ns
 from word_index import build_word_index, selected_word_text
 
 
@@ -29,6 +31,7 @@ def write_conversation_diagnostics(
     first_pass_ends: list[float | None] | None = None,
     first_pass_strategies: list[str] | None = None,
     refinement_records: dict[int, dict] | None = None,
+    timing: dict[str, Any] | None = None,
 ) -> None:
     """Persist one atomic JSON record per conversation.
 
@@ -38,10 +41,12 @@ def write_conversation_diagnostics(
     if not DIAGNOSTICS_ENABLED:
         return
 
+    diagnostics_started = now_ns()
     try:
         output_dir = Path(DIAGNOSTICS_DIR)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        payload_started = now_ns()
         indexed_words = build_word_index(segments)
         words_payload = [
             {
@@ -127,22 +132,54 @@ def write_conversation_diagnostics(
                 }
             )
 
+        timing_payload = dict(timing or {})
+        diagnostics_timing = dict(timing_payload.get('diagnostics') or {})
+        diagnostics_timing['payload_build_ms'] = elapsed_ms(payload_started)
+        timing_payload['diagnostics'] = diagnostics_timing
+
         payload = {
-            'schema_version': 2,
+            'schema_version': 3,
             'created_at_utc': datetime.now(timezone.utc).isoformat(),
             'audio_filename': req.audio_filename,
             'questions': questions_payload,
             'segments': segments_payload,
             'words': words_payload,
+            'timing': timing_payload,
         }
+
+        # Serialize once to measure representative JSON encoding cost, then
+        # record that measurement in the final serialized payload.
+        serialize_started = now_ns()
+        json.dumps(payload, ensure_ascii=False)
+        diagnostics_timing['json_serialize_ms'] = elapsed_ms(serialize_started)
+        diagnostics_timing['pre_write_total_ms'] = elapsed_ms(
+            diagnostics_started
+        )
+        payload['timing']['diagnostics'] = diagnostics_timing
 
         target = output_dir / f'{_safe_stem(req.audio_filename)}.json'
         temporary = target.with_suffix('.json.tmp')
-        temporary.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False),
-            encoding='utf-8',
+
+        final_serialized = json.dumps(
+            payload,
+            indent=2,
+            ensure_ascii=False,
         )
+
+        write_started = now_ns()
+        temporary.write_text(final_serialized, encoding='utf-8')
         temporary.replace(target)
+        file_write_ms = elapsed_ms(write_started)
+
+        # File-write time cannot be embedded without adding another write and
+        # contaminating the measurement. Keep it in the server log instead.
+        log.info(
+            'Diagnostics timing for %s: build=%.2fms serialize=%.2fms write=%.2fms',
+            req.audio_filename,
+            diagnostics_timing['payload_build_ms'],
+            diagnostics_timing['json_serialize_ms'],
+            file_write_ms,
+        )
 
     except Exception:
         log.exception(
